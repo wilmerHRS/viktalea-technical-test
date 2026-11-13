@@ -1,1 +1,9 @@
-*.sh text eol=lf
+# Finales de línea LF en todos los archivos de texto, sea cual sea el sistema o core.autocrlf.
+# Prettier exige LF: sin esto, un clon en Windows convierte a CRLF y format:check falla.
+* text=auto eol=lf
+
+# Binarios: nunca convertir.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
