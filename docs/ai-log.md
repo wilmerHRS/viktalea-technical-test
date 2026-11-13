@@ -16,7 +16,8 @@
 |---|---|---|---|
 | 0.1 | Proyecto en JavaScript (ESM + JSDoc). | "Hazlo con TypeScript". | Tipado estático para contratos (puertos, DTOs). |
 | 0.2 | Repositorio como clase abstracta. | Pregunta: "¿aplicas interfaces para los repositorios?". Se confirmó el uso de `interface` + `implements`. | Los puertos de Clean Architecture deben ser contratos verificados en compilación. |
-| 0.3 | Imports relativos con extensión `.js` (requisito de `nodenext`). | "Las importaciones hacen referencia a archivos js". Se cambió a `.ts` con `rewriteRelativeImportExtensions`. | Legibilidad: el import debe apuntar al archivo real. |
+| 0.3 | Imports relativos con extensión `.js` (requisito de 
+odenext`). | "Las importaciones hacen referencia a archivos js". Se cambió a `.ts` con `rewriteRelativeImportExtensions`. | Legibilidad: el import debe apuntar al archivo real. |
 | 0.4 | `env.ts` con validación extensa (reglas de CORS por entorno, validación de URL, `superRefine` con `when`). | "Tiene muchas validaciones que no hacen entendible el archivo". Se simplificó a un esquema zod de ~35 líneas. | La validación de configuración debe ser legible. Las reglas condicionales se quitaron por complejidad sin valor real. |
 | 0.5 | El agente dejó un archivo vacío `{}` en la raíz (efecto secundario de un comando de shell mal escapado). | "¿Para qué creaste este archivo?". Se eliminó. | Basura accidental: revisar siempre el árbol de archivos antes de hacer commit. |
 | 0.6 | Registro de módulos escondido (`createApp({ modules })` + `src/modules/index.ts`). | "No entiendo de dónde sale `modules`". Ahora `main.ts` crea los módulos y los pasa a `createApp([...])`. | La composición debe ser explícita en el entry point. |
@@ -46,4 +47,9 @@
 - Procesar webhooks sin deduplicar o permitir que un estado final cambie.
 - Llamar a la pasarela dentro de una transacción abierta (bloquea filas durante I/O externo).
 - Tests que mockean la base de datos y por eso no prueban la concurrencia real.
-`n### T1 — Infraestructura`nSe integraron Drizzle y pg, las cuatro tablas con la columna de lease, migraciones generadas y configuración validada. Se comprobó el SQL generado y las restricciones en PostgreSQL real. typecheck y 40 tests pasan. RECONCILE_LEASE_MS se declara desde T1 junto a las demás variables de §9; su relación con el timeout se comprobará al componer el reconciliador en T9 para mantener simple envSchema. El reexport de esquemas en shared sigue el diseño explícito de T1, como registro técnico de esquemas. Sin cambios en Docker ni en requirements/design.
+
+### T1 — Infraestructura
+Se integraron Drizzle y pg, las cuatro tablas con la columna de lease, migraciones generadas y configuración validada. Se comprobó el SQL generado y las restricciones en PostgreSQL real. typecheck y 40 tests pasan. RECONCILE_LEASE_MS se declara desde T1 junto a las demás variables de §9; su relación con el timeout se comprobará al componer el reconciliador en T9 para mantener simple envSchema. El reexport de esquemas en shared sigue el diseño explícito de T1, como registro técnico de esquemas. Sin cambios en Docker ni en requirements/design.
+
+### T2 — Limpieza y observabilidad
+Se eliminó users y sus tests, se montan módulos en la raíz y se agregó pino con req.log y requestId. Se permite inyectar el logger en createApp para verificar el JSON sin capturar stdout global. typecheck y 36 tests pasan; el menor total se debe a quitar los tests del módulo de ejemplo. Sin desviaciones del spec. Se corrigieron saltos de línea literales en la entrada T1 del registro.

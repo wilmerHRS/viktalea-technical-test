@@ -34,7 +34,7 @@
     - Scripts: `db:generate` (`drizzle-kit generate`), `db:migrate` (carga `.env`) y `db:migrate:test` (carga `.env.test`). El script `test` carga `.env.test`.
   - **Acepta cuando**: `npm run db:up && npm run db:migrate` crea las 4 tablas con sus restricciones (`\d operations` muestra el `UNIQUE` de `idempotency_key` y los `CHECK`), y un test de humo hace `select 1` con Drizzle contra `cashin_test`.
 
-- [ ] **T2. Limpieza y observabilidad**: R1.1, R9
+- [x] **T2. Limpieza y observabilidad**: R1.1, R9
   - Eliminar el módulo `users` y sus tests.
   - `app.ts`: montar los módulos en la raíz (sin `/api/v1`).
   - Logger `pino` en `shared/infrastructure/logging/logger.ts` con el nivel `LOG_LEVEL`.

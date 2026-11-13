@@ -4,7 +4,7 @@ import { AppError } from '../../../domain/errors/index.ts';
 const isJsonParseError = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && 'type' in err && err.type === 'entity.parse.failed';
 
-export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
+export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
       error: { code: err.code, message: err.message, details: err.details },
@@ -18,6 +18,6 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     return;
   }
 
-  console.error(err);
+  req.log.error({ err }, 'Request failed');
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
 };
