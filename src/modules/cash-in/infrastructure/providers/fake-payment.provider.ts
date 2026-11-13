@@ -24,6 +24,8 @@ export const FakeChargeBehavior = {
   TIMEOUT_AFTER_CHARGE: 'timeout_after_charge',
   /** No cobra y responde con error de red / 5xx. */
   UNAVAILABLE: 'unavailable',
+  /** Aprueba, pero tarda SLOW_CHARGE_DELAY_MS (menos que el timeout): deja tiempo a un webhook. */
+  SLOW_APPROVE: 'slow_approve',
 } as const;
 export type FakeChargeBehavior = (typeof FakeChargeBehavior)[keyof typeof FakeChargeBehavior];
 
@@ -33,13 +35,18 @@ export const FakePaymentMethod = {
   TIMEOUT: 'card_timeout',
   TIMEOUT_AFTER_CHARGE: 'card_timeout_after_charge',
   UNAVAILABLE: 'card_unavailable',
+  SLOW: 'card_slow',
 } as const;
+
+/** Lo que tarda en aprobar `card_slow`. Menor que PROVIDER_TIMEOUT_MS por defecto (5 s). */
+export const SLOW_CHARGE_DELAY_MS = 3_000;
 
 const BEHAVIOR_BY_PAYMENT_METHOD: Readonly<Record<string, FakeChargeBehavior>> = {
   [FakePaymentMethod.DECLINED]: FakeChargeBehavior.DECLINE,
   [FakePaymentMethod.TIMEOUT]: FakeChargeBehavior.TIMEOUT,
   [FakePaymentMethod.TIMEOUT_AFTER_CHARGE]: FakeChargeBehavior.TIMEOUT_AFTER_CHARGE,
   [FakePaymentMethod.UNAVAILABLE]: FakeChargeBehavior.UNAVAILABLE,
+  [FakePaymentMethod.SLOW]: FakeChargeBehavior.SLOW_APPROVE,
 };
 
 const CHARGE_ID_PREFIX = 'ch_';
@@ -103,6 +110,10 @@ export class FakePaymentProvider implements PaymentProvider {
         throw new ProviderTimeoutError();
       case FakeChargeBehavior.UNAVAILABLE:
         throw new ProviderUnavailableError();
+      case FakeChargeBehavior.SLOW_APPROVE:
+        // El cobro solo existe cuando la pasarela termina: si el pod muere antes, no se cobró.
+        await sleep(SLOW_CHARGE_DELAY_MS);
+        return this.record(idempotencyKey, this.approvedCharge());
       default:
         return this.record(idempotencyKey, this.approvedCharge());
     }

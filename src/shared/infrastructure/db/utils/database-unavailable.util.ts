@@ -11,8 +11,18 @@ const UNAVAILABLE_SQLSTATES = new Set([
 ]);
 const CONNECTION_EXCEPTION_PREFIX = '08'; // clase 08: errores de conexión
 
-/** Mensaje del pool de `pg` cuando no consigue una conexión a tiempo. */
-const POOL_TIMEOUT_MESSAGE = 'timeout exceeded when trying to connect';
+/**
+ * Mensajes de `pg` que no traen código pero significan "se perdió la conexión":
+ * - el pool no consigue una conexión a tiempo;
+ * - la BD se cae con conexiones ya abiertas en el pool (detectado en la validación en vivo:
+ *   sin esto, una caída con el pool "caliente" respondía 500 en vez de 503).
+ */
+const CONNECTION_LOST_MESSAGES = [
+  'timeout exceeded when trying to connect',
+  'Connection terminated unexpectedly',
+  'Connection terminated',
+  'Client has encountered a connection error and is not queryable',
+];
 
 const MAX_CAUSE_DEPTH = 5;
 
@@ -26,7 +36,7 @@ const isUnavailable = (error: object): boolean => {
     (code !== undefined && NETWORK_ERROR_CODES.has(code)) ||
     (code !== undefined && UNAVAILABLE_SQLSTATES.has(code)) ||
     (code !== undefined && code.startsWith(CONNECTION_EXCEPTION_PREFIX)) ||
-    message.includes(POOL_TIMEOUT_MESSAGE)
+    CONNECTION_LOST_MESSAGES.some((lostMessage) => message.includes(lostMessage))
   );
 };
 

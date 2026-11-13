@@ -47,6 +47,18 @@ npm test                # 133 tests contra PostgreSQL real (unitarios, integraci
 npm run typecheck && npm run lint && npm run format:check
 ```
 
+### Documentación de la API (Swagger)
+
+Con el servidor levantado: **http://localhost:3000/docs** (Swagger UI, con "Try it out") y `/docs/openapi.json`. Los esquemas de los bodies se generan desde los mismos validadores zod que usa la API.
+
+### Validación en vivo de los escenarios del challenge
+
+```bash
+npm run validate:live
+```
+
+Levanta varios pods reales sobre la misma base y comprueba en PostgreSQL los 11 escenarios: doble click, retry, multi-pod, timeout (pregunta central), webhook duplicado, fuera de orden y antes de la respuesta, BD caída (503), reinicio a mitad del cobro, race condition del saldo y validaciones del contrato. Resultado actual: **11/11**.
+
 ### Probarlo a mano
 
 La pasarela es **simulada** (`fake-payment.provider.ts`) y su comportamiento se elige con `payment_method`:

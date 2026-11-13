@@ -10,6 +10,7 @@ import { ReconcileOperations } from './application/use-cases/reconcile-operation
 import { SettleOperation } from './application/use-cases/settle-operation.use-case.ts';
 import type { PaymentProvider } from './domain/gateways/payment-provider.gateway.ts';
 import { CashInController } from './infrastructure/http/controllers/cash-in.controller.ts';
+import { cashInOpenApi } from './infrastructure/http/docs/cash-in.openapi.ts';
 import { buildCashInRouter } from './infrastructure/http/routes/cash-in.routes.ts';
 import { PaymentWebhookController } from './infrastructure/http/controllers/payment-webhook.controller.ts';
 import { DrizzleUnitOfWork } from './infrastructure/persistence/unit-of-work/drizzle-unit-of-work.ts';
@@ -46,7 +47,7 @@ export const createCashInModule = (dependencies: CashInModuleDependencies): Http
     }),
   });
 
-  return { basePath: ROOT_PATH, router };
+  return { basePath: ROOT_PATH, router, docs: cashInOpenApi };
 };
 
 export interface CashInReconcilerDependencies {

@@ -2,7 +2,9 @@ import express, { type Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import { env } from './config/env.config.ts';
+import { buildOpenApiDocument } from './shared/infrastructure/http/docs/openapi-document.builder.ts';
 import type { HttpModule } from './shared/infrastructure/http/interfaces/http-module.interface.ts';
+import { buildDocsRouter } from './shared/infrastructure/http/routes/docs.routes.ts';
 import { errorHandler } from './shared/infrastructure/http/middlewares/error-handler.middleware.ts';
 import { notFound } from './shared/infrastructure/http/middlewares/not-found.middleware.ts';
 import { createRequestId } from './shared/infrastructure/http/middlewares/request-id.middleware.ts';
@@ -30,6 +32,9 @@ export const createApp = (modules: HttpModule[], options: AppOptions = {}): Expr
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
   });
+
+  // Documentación de las APIs: Swagger UI en /docs y el JSON en /docs/openapi.json.
+  app.use(buildDocsRouter(buildOpenApiDocument(modules)));
 
   for (const { basePath, router } of modules) {
     app.use(basePath, router);
