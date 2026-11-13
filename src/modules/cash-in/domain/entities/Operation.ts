@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ValidationError, type FieldError } from '../../../../shared/domain/errors/index.ts';
 import { OperationStatus } from '../value-objects/OperationStatus.ts';
 import { Currency, SUPPORTED_CURRENCIES } from '../value-objects/Currency.ts';
@@ -85,7 +86,17 @@ export class Operation implements Readonly<OperationData> {
     });
   }
 
+  /** Nuevo identificador público de operación: `op_` + UUID sin guiones. */
+  static newId(): string {
+    return `${OPERATION_ID_PREFIX}${randomUUID().replaceAll('-', '')}`;
+  }
+
   static restore(data: OperationData): Operation {
     return new Operation(data);
+  }
+
+  /** La misma operación, con el saldo de la wallet que resultó de acreditarla. */
+  withNewBalance(newBalanceCents: number): Operation {
+    return new Operation({ ...this, newBalanceCents });
   }
 }

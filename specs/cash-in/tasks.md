@@ -98,14 +98,24 @@
   4. **Resto del proyecto**: aplicar §2.2.2 (valores con nombre) donde el formatter no basta. Por ejemplo, los mensajes de error largos de `Money.ts` y `errorHandler.ts` pasan a constantes con nombre, y los tests extraen sus fixtures y valores esperados a variables descriptivas en lugar de literales en línea.
   - **Acepta cuando**: `npm run typecheck`, `npm run lint`, `npm run format:check` y `npm test` pasan; `awk 'length > 100'` sobre `src/` y `tests/` no devuelve líneas, salvo URLs o strings que no se pueden partir (justificar cada una en el reporte); `domain/repositories/` y `domain/gateways/` no contienen tipos de objeto anónimos en las firmas ni reexportaciones; `DrizzleOperationRepository` no importa `ValidationError`.
 
-- [ ] **T5. Pasarela falsa**: R4
+- [x] **T4.3. Lógica en casos de uso + Unit of Work** (implementada por el agente A, revisión humana de T4.2): design §2, §5, §5.1, §6.1–§6.3
+  > Origen: "los repositorios solo deberían comunicarse con la BD; la lógica va en los casos de uso". Tras T4.2, `DrizzleOperationRepository` seguía orquestando `claim`, `settle` y `applyWebhookEvent` porque era el único con la transacción. **Sustituye la API de repositorio de T4, T4.1 y T4.2.**
+  - Puerto `UnitOfWork` (`application/ports/`) y adaptador `DrizzleUnitOfWork`.
+  - Repositorios sin lógica, uno por tabla: `Operation`, `Wallet`, `Ledger` y `WebhookEvent`.
+  - Lógica en la aplicación: `services/settleOperation.ts` y los casos de uso `ClaimOperation`, `SettleOperation`, `MarkOperationUnknown` y `HandlePaymentWebhook`.
+  - Migración `0001`: `webhook_events.result` nullable (sin valor de relleno).
+  - Tests de integración reescritos contra los casos de uso, con 2 pods reales: `tests/modules/cash-in/cashIn.integration.test.ts` y el fixture `tests/fixtures/cashInPod.ts`. Cubren las mismas garantías que antes.
+  - **Resultado**: 109 tests, `lint`, `format:check` y `typecheck` en verde. La suite de integración pasa 5 de 5 corridas. `db:generate` sin cambios pendientes.
+
+- [x] **T5. Pasarela falsa**: R4 — hecha por A (`FakePaymentProvider`, comportamiento por `payment_method`, `chargeCalls`, `setDelay`)
   - `FakePaymentProvider` según design §8: idempotente por key, `nextOutcome`, `chargeCount`, `setDelay` y el mapeo de `payment_method` para runtime.
   - Errores `ProviderTimeoutError` y `ProviderUnavailableError`. El timeout lo aplica `CreateCashIn` con `PROVIDER_TIMEOUT_MS` (`AbortSignal.timeout` o `Promise.race`).
   - **Acepta cuando**: hay tests unitarios del fake, incluido que `timeout_after_charge` deja `getChargeStatus = approved`.
 
-- [ ] **T6. `POST /cash-in`**: R1, R2, R4
+- [x] **T6. `POST /cash-in`**: R1, R2, R4 — hecha por A (`tests/modules/cash-in/cashIn.http.test.ts`)
   - `requestHash.ts`, `CashInResponse.ts` (tabla de design §7), `CreateCashIn.ts` (flujo de design §6.1), `CashInController` y la ruta.
-  - Módulo `createCashInModule({ db, provider, ... })` registrado en `main.ts`.
+  - `CreateCashIn` **orquesta los casos de uso existentes** (`ClaimOperation`, `SettleOperation`, `MarkOperationUnknown`) y llama a la pasarela **fuera** de cualquier `unitOfWork.run`. No añade lógica nueva a los repositorios.
+  - Módulo `createCashInModule({ db, provider, ... })` registrado en `main.ts`: crea el `DrizzleUnitOfWork`, los casos de uso y el controller.
   - **Acepta cuando** hay tests HTTP de:
     - éxito: 200 y saldo acreditado;
     - rechazo: 402 y saldo sin cambios;
@@ -115,12 +125,16 @@
     - header ausente o inválido: 400;
     - body inválido: 400.
 
-- [ ] **T7. Concurrencia con varios pods**: R2.1, R2.5
+- [x] **T7. Concurrencia con varios pods**: R2.1, R2.5 — hecha por A (3 apps, 10 requests con la misma key)
   - Test con 3 instancias de `createApp()`, cada una con su propio `createDb()` (pool independiente) sobre `cashin_test`, y 10 requests en paralelo con la misma key.
   - **Acepta cuando**: hay 1 fila en `operations`, 1 en `ledger_entries`, `chargeCount = 1`, y todas las respuestas son 200 con el mismo `operation_id` y `new_balance`, o 202 `pending` con el mismo `operation_id`.
 
-- [ ] **T8. `POST /webhooks/payment`**: R5
-  - `verifySignature.ts` (HMAC-SHA256 del body crudo con `timingSafeEqual`), `HandlePaymentWebhook.ts` (design §6.3, usando `repo.applyWebhookEvent` de T4.1, sin abrir transacciones en la capa de aplicación), `WebhookController` y la ruta.
+- [x] **T8. `POST /webhooks/payment`**: R5 — hecha por A (firma, duplicado, fuera de orden, antes de la respuesta, 404, 400)
+  - `verifySignature.ts` (HMAC-SHA256 del body crudo con `timingSafeEqual`), `WebhookController` y la ruta. El caso de uso `HandlePaymentWebhook` **ya existe** (T4.3); aquí se añade la capa HTTP:
+    - validación del body;
+    - "`provider_charge_id` obligatorio si `approved`" → 400 (pendiente desde T4.2);
+    - el 404 de una operación inexistente;
+    - el log `warn` de los `CONFLICT`.
   - **Acepta cuando** hay tests de:
     - firma inválida: 401;
     - webhook `approved` sobre una operación `UNKNOWN`: `COMPLETED` y saldo acreditado;
@@ -129,8 +143,12 @@
     - webhook antes que la respuesta: con `setDelay` en el fake, el webhook liquida durante el cobro; el `/cash-in` responde 200 y hay 1 sola entrada en el ledger;
     - `operation_id` inexistente: 404.
 
-- [ ] **T9. Reconciliador y resiliencia**: R7, R8
-  - `ReconcileOperations.ts` con las tres fases de design §6.4 (reservar, consultar fuera de cualquier transacción, liquidar) y `startReconciler.ts` (al arrancar, con intervalo y parada en el shutdown de `main.ts`). Añadir `RECONCILE_LEASE_MS` a `env.ts` y a `.env.example`.
+- [ ] **T9. Reconciliador y resiliencia**: R7, R8 — **parcial**: el 503 con BD caída ya está (A); falta el reconciliador
+  - `ReconcileOperations.ts` con las tres fases de design §6.4:
+    1. reservar con `unitOfWork.run(r => r.operations.leasePendingBatch(criteria))`, que se confirma al salir;
+    2. consultar la pasarela fuera de cualquier `run`;
+    3. liquidar con `SettleOperation`.
+  - `startReconciler.ts`: al arrancar, con intervalo y parada en el shutdown de `main.ts`. `RECONCILE_LEASE_MS` ya existe en `env.ts`.
   - `errorHandler`: los errores de conexión de `pg` se traducen a 503.
   - **Acepta cuando** hay tests de:
     - `timeout_after_charge` seguido de `execute()`: `COMPLETED`;

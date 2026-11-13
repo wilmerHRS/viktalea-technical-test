@@ -47,21 +47,33 @@ src/
     │   │   ├── OperationStatus.ts  # "enum" + tabla de transiciones + SETTLEABLE_STATUSES / FINAL_STATUSES + toApiStatus()
     │   │   ├── Money.ts            # CENTS_PER_UNIT, toCents(), fromCents()
     │   │   ├── Currency.ts         # "enum" Currency (PEN) + SUPPORTED_CURRENCIES
-    │   │   └── WebhookEventResult.ts # "enum" + classifyWebhookResult() (regla de R5.4, función pura)
-    │   ├── repositories/
-    │   │   └── OperationRepository.ts # puerto de persistencia (tipos de dominio, sin `tx`)
+    │   │   ├── WebhookEventResult.ts # "enum" + classifyWebhookResult() (regla de R5.4, función pura)
+    │   │   ├── SettleOutcome.ts    # resultado con el que se liquida (COMPLETED + chargeId | FAILED + motivo)
+    │   │   └── PaymentWebhookEvent.ts # evento validado + toSettleOutcome()
+    │   ├── repositories/           # puertos de persistencia: una sentencia atómica por método, SIN lógica
+    │   │   ├── OperationRepository.ts   # insertIfKeyIsNew, findById, findByIdempotencyKey, changeStatus, leasePendingBatch
+    │   │   ├── WalletRepository.ts      # ensureExists, credit (balance = balance + x)
+    │   │   ├── LedgerRepository.ts      # append
+    │   │   └── WebhookEventRepository.ts # insertIfNew, saveResult
     │   └── gateways/
     │       └── PaymentProvider.ts  # puerto hacia el sistema externo + "enums" ChargeOutcome / ProviderChargeStatus
-    ├── application/
-    │   ├── CreateCashIn.ts         # flujo de R1/R2/R4
-    │   ├── HandlePaymentWebhook.ts # flujo de R5
-    │   ├── ReconcileOperations.ts  # flujo de R7
+    ├── application/                # AQUÍ está la lógica: cada caso de uso se lee paso a paso
+    │   ├── ports/UnitOfWork.ts     # ejecuta varios repositorios en UNA transacción (§5.1)
+    │   ├── services/settleOperation.ts # liquidar: cambiar estado → acreditar → ledger (única vía, §6.2)
+    │   ├── use-cases/
+    │   │   ├── ClaimOperation.ts        # registrar la operación de una idempotency key (R2) ✅
+    │   │   ├── SettleOperation.ts       # liquidar en su propia transacción ✅
+    │   │   ├── MarkOperationUnknown.ts  # PROCESSING → UNKNOWN tras un timeout (R4.4) ✅
+    │   │   ├── HandlePaymentWebhook.ts  # deduplicar + liquidar + clasificar (R5) ✅ (falta la capa HTTP, T8)
+    │   │   ├── CreateCashIn.ts          # flujo completo de POST /cash-in (T6): usa Claim/Settle/MarkUnknown
+    │   │   └── ReconcileOperations.ts   # flujo de R7 (T9)
     │   ├── requestHash.ts          # sha256 del payload canónico
     │   └── CashInResponse.ts       # Operation → { httpStatus, body } (R1.5–R1.7, R3.5)
     └── infrastructure/
         ├── persistence/
         │   ├── schema.ts           # tablas Drizzle del módulo (pgTable): wallets, operations, ledger_entries, webhook_events
-        │   └── DrizzleOperationRepository.ts
+        │   ├── Drizzle{Operation,Wallet,Ledger,WebhookEvent}Repository.ts # consultas, construidas sobre un DbExecutor
+        │   └── DrizzleUnitOfWork.ts # db.transaction + repositorios sobre ese tx
         ├── provider/FakePaymentProvider.ts
         ├── http/CashInController.ts, WebhookController.ts, cashInRoutes.ts, verifySignature.ts
         └── jobs/startReconciler.ts # setInterval + ejecución al arrancar
@@ -192,39 +204,38 @@ export interface PaymentProvider {
   getChargeStatus(idempotencyKey: string): Promise<{ status: ProviderChargeStatus; providerChargeId?: string; reason?: string }>;
 }
 
-// domain/repositories/OperationRepository.ts   (tipos de dominio únicamente: sin `tx`, sin tipos de Drizzle)
-export interface OperationRepository {
-  /** INSERT ON CONFLICT DO NOTHING. created=false → ya existía (devuelve la existente). */
-  claim(input: NewOperation): Promise<{ created: boolean; operation: Operation }>;
-  findById(id: string): Promise<Operation | null>;
-  markUnknown(id: string): Promise<void>;                      // PROCESSING → UNKNOWN (condicional)
-  settle(id: string, outcome: SettleOutcome): Promise<{ applied: boolean; operation: Operation }>;
-  /**
-   * Para el reconciliador (§6.4): reserva hasta `limit` operaciones pendientes y sin reserva vigente
-   * en UNA transacción corta que se confirma antes de devolver. El lease es un detalle del adaptador:
-   * no aparece en la entidad. El llamador consulta la pasarela FUERA de cualquier transacción.
-   */
-  leasePendingBatch(olderThanMs: number, leaseMs: number, limit: number): Promise<Operation[]>;
-  /**
-   * Webhook (§6.3) en UNA transacción: deduplica por eventId, liquida con settle y guarda
-   * el resultado clasificado con classifyWebhookResult(). Atómico: o queda todo o nada.
-   */
-  applyWebhookEvent(event: PaymentWebhookEvent): Promise<
-    | { duplicate: true }
-    | { duplicate: false; result: WebhookEventResult; operation: Operation }
-  >;
+// domain/repositories/*  — persistencia SIN lógica: cada método es una sentencia atómica
+interface OperationRepository {
+  insertIfKeyIsNew(op: NewOperation): Promise<Operation | null>; // INSERT … ON CONFLICT DO NOTHING; null = key tomada
+  findById(id: string): Promise<Operation | null>;                // + saldo del ledger (LEFT JOIN)
+  findByIdempotencyKey(key: string): Promise<Operation | null>;
+  changeStatus(id: string, change: StatusChange): Promise<Operation | null>; // UPDATE … WHERE status IN (change.from)
+  leasePendingBatch(criteria: LeaseCriteria): Promise<Operation[]>;          // reserva del reconciliador (§6.4)
 }
-export type SettleOutcome =
-  | { status: typeof OperationStatus.COMPLETED; providerChargeId: string }
-  | { status: typeof OperationStatus.FAILED; reason: string };
-export interface PaymentWebhookEvent {
-  eventId: string; operationId: string; status: ChargeOutcome; providerChargeId?: string; payload: unknown;
+interface WalletRepository { ensureExists(userId): Promise<void>; credit(userId, amountCents): Promise<number> }
+interface LedgerRepository { append(entry: NewLedgerEntry): Promise<void> }
+interface WebhookEventRepository {
+  insertIfNew(event: PaymentWebhookEvent): Promise<boolean>; // false = eventId repetido
+  saveResult(eventId: string, result: WebhookEventResult): Promise<void>;
 }
 ```
 
+- **Los repositorios no deciden nada.** Qué estados son válidos (`change.from`), qué pasa después de acreditar o cómo se clasifica un webhook lo decide la capa de aplicación (§5.1 y §6). Las garantías de concurrencia (`ON CONFLICT`, `WHERE status IN`, `balance + x`, `SKIP LOCKED`) siguen en SQL porque deben ser atómicas, pero los **parámetros** (qué estados, qué monto) los pasa el caso de uso.
 - `Operation` incluye `newBalanceCents: number | null`, que se obtiene con un `LEFT JOIN ledger_entries`. **No** incluye `reconcileLockedUntil`, porque es un detalle de persistencia del reconciliador.
-- El adaptador puede usar internamente un `tx` (por ejemplo `settle` lo reutiliza dentro de `applyWebhookEvent`), pero el puerto no lo expone.
-- `recordWebhookEvent` desaparece del puerto: la deduplicación solo tiene sentido junto con el efecto, dentro de `applyWebhookEvent`.
+- `SettleOutcome` y `PaymentWebhookEvent` (con `toSettleOutcome`) viven en `value-objects/`.
+
+### 5.1 Unit of Work: transacciones sin lógica en el repositorio [decisión humana, revisión de T4.2]
+
+```ts
+// application/ports/UnitOfWork.ts
+interface CashInRepositories { operations; wallets; ledger; webhookEvents }
+interface UnitOfWork { run<T>(work: (repositories: CashInRepositories) => Promise<T>): Promise<T> }
+```
+
+- Un caso de uso que necesita varios pasos atómicos los escribe **en orden y legibles** dentro de `unitOfWork.run(...)`. Todo lo que hace con esos repositorios se confirma junto o se revierte junto.
+- `DrizzleUnitOfWork` implementa `run` con `db.transaction(tx => work(createCashInRepositories(tx)))`. Los repositorios se construyen sobre un `DbExecutor` (el cliente o el `tx`), así que el puerto nunca expone `tx` ni tipos de Drizzle.
+- **Nunca** se llama a la pasarela dentro de `run` (§6.5).
+- Motivo: la versión anterior (`claim`, `settle` y `applyWebhookEvent` en el repositorio) metía la orquestación de negocio en el adaptador, porque era el único que tenía la transacción. La revisión humana lo detectó: "los repositorios solo se comunican con la BD; la lógica va en los casos de uso".
 
 ## 6. Flujos
 
@@ -234,26 +245,27 @@ export interface PaymentWebhookEvent {
 
 ```
 1. Validar header (UUID) y body (R1.2, R1.3) → requestHash = sha256(JSON canónico de user_id, amount_cents, currency, payment_method)
-2. repo.claim():  BEGIN
-                    INSERT INTO wallets(user_id) VALUES ($u) ON CONFLICT DO NOTHING;      -- R1.4
-                    INSERT INTO operations(... status='PROCESSING') ON CONFLICT (idempotency_key) DO NOTHING RETURNING *;
-                    si no devolvió fila → SELECT ... WHERE idempotency_key = $k
-                  COMMIT
+2. claimOperation.execute(newOp)   (ya implementado)  ── en UNA transacción:
+                    wallets.ensureExists(userId)                     -- INSERT … ON CONFLICT DO NOTHING (R1.4)
+                    operations.insertIfKeyIsNew(newOp)               -- INSERT … ON CONFLICT (idempotency_key) DO NOTHING
+                    si null → operations.findByIdempotencyKey(key)   -- la otra request ya la registró
 3. Si created = false:
      hash distinto → 422 IDEMPOTENCY_KEY_REUSED (R2.4)
      si no         → return CashInResponse(operation)  (sin llamar a la pasarela: R2.2, R2.3)
-4. Llamar provider.charge({ idempotencyKey: op.id, ... }) con timeout PROVIDER_TIMEOUT_MS
-     approved   → repo.settle(op.id, COMPLETED)
-     declined   → repo.settle(op.id, FAILED)
-     timeout/red→ repo.markUnknown(op.id)        -- NO reintentar (R4.4)
-5. op = repo.findById(op.id)  → return CashInResponse(op)
+4. Llamar provider.charge({ idempotencyKey: op.id, ... }) con timeout PROVIDER_TIMEOUT_MS  (FUERA de cualquier transacción)
+     approved   → settleOperation.execute(op.id, COMPLETED)
+     declined   → settleOperation.execute(op.id, FAILED)
+     timeout/red→ markOperationUnknown.execute(op.id)   -- NO reintentar (R4.4)
+5. op = findById(op.id) → return CashInResponse(op)
 ```
 
 Puntos clave:
 - **El INSERT se confirma antes de llamar a la pasarela.** Así, si el pod se cae durante el paso 4, la operación queda persistida en `PROCESSING` y el reconciliador la retoma (R8.2). Además, un webhook que llegue antes siempre encuentra la operación (R5.5).
 - En el paso 5 se **relee** la operación en lugar de usar el resultado local, porque un webhook pudo haberla liquidado antes (R5.5). `settle` y `markUnknown` son condicionales, así que la vía que pierde no pisa a la que ganó.
 
-### 6.2 `repo.settle()`, la única forma de finalizar (R3.4, R6.1, R6.2)
+### 6.2 `settleOperation()`, la única forma de finalizar (R3.4, R6.1, R6.2)
+
+Vive en `application/services/settleOperation.ts` y se ejecuta dentro de un `UnitOfWork`. La usan `SettleOperation`, `HandlePaymentWebhook` y (en T9) el reconciliador. Pasos: `operations.changeStatus(id, { from: SETTLEABLE_STATUSES, to })` → si `null`, devolver la existente con `applied: false` → si `FAILED`, terminar → `wallets.credit` → `ledger.append`. El SQL equivalente:
 
 ```sql
 BEGIN;
@@ -279,21 +291,22 @@ El `UPDATE … WHERE status IN (…)` toma un lock de fila sobre la operación. 
    (express.json({ verify }) guarda req.rawBody)
 2. Validar body → si falla, 400
 3. op = repo.findById(operation_id) → si no existe, 404 (R5.6)
-4. r = repo.applyWebhookEvent(event)      ── dentro del adaptador, en UNA transacción:
-     INSERT INTO webhook_events(..., result='ignored') ON CONFLICT (event_id) DO NOTHING RETURNING event_id
-       sin fila → COMMIT, return { duplicate: true }                                     (R5.3)
-     s = settle(op.id, approved ? COMPLETED : FAILED)   (con el mismo tx, interno al adaptador)
+4. r = handlePaymentWebhook.execute(event)   (caso de uso ya implementado) ── en UNA unidad de trabajo:
+     webhookEvents.insertIfNew(event)           -- INSERT … ON CONFLICT (event_id) DO NOTHING, result = NULL
+       false → return { duplicate: true }                                                (R5.3)
+     s = settleOperation(repositories, op.id, toSettleOutcome(event))
      result = classifyWebhookResult({ applied: s.applied, eventStatus, finalStatus: s.operation.status })
               → APPLIED | IGNORED (coincide con el final) | CONFLICT (lo contradice)      (R5.4)
-     UPDATE webhook_events SET result = $result WHERE event_id = $e
+     webhookEvents.saveResult(eventId, result)  -- nunca se confirma una fila con result NULL
    COMMIT
 5. duplicate → 200 { received: true, duplicate: true }
    CONFLICT  → log warn con operationId, eventId y los dos estados; 200 { received: true }
    otro      → 200 { received: true }
 ```
 
-- `classifyWebhookResult()` es una **función pura de dominio** (`value-objects/WebhookEventResult.ts`) que se testea sin BD. El adaptador solo la invoca.
-- La transacción vive en el adaptador, así el puerto no filtra `tx` ni tipos de Drizzle al dominio. Si falla, no queda ni el evento ni el efecto, y la pasarela reintenta el webhook (R5.7).
+- `classifyWebhookResult()` es una **función pura de dominio** (`value-objects/WebhookEventResult.ts`) que se testea sin BD.
+- La orquestación está en el caso de uso y la atomicidad la da el `UnitOfWork` (§5.1). Si falla cualquier paso, no queda ni el evento ni el efecto, y la pasarela reintenta el webhook (R5.7).
+- `webhook_events.result` es nullable (migración `0001`): se inserta sin resultado para deduplicar y se completa antes del commit. Así se evita guardar un valor de relleno engañoso.
 
 ### 6.4 Reconciliador (R7)
 
@@ -340,7 +353,7 @@ Se usa el query builder por defecto. Si una consulta queda más clara o más cor
 | Incremento atómico del saldo (R6.3) | `` tx.update(wallets).set({ balanceCents: sql`${wallets.balanceCents} + ${amount}` }).where(eq(wallets.userId, userId)).returning() `` |
 | Deduplicar el webhook (R5.3) | `tx.insert(webhookEvents).values(e).onConflictDoNothing({ target: webhookEvents.eventId }).returning()` |
 | Reserva del lote del reconciliador (R7.3) | `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING *` de §6.4. Es un buen candidato para SQL crudo (`` db.execute(sql`…`) ``); con el builder, la subconsulta usa `.for('update', { skipLocked: true })`. |
-| Transacción (R6.1) | `db.transaction(async (tx) => { … })`. Dentro del adaptador, los métodos privados o internos pueden recibir `tx?: Tx` y usar `tx ?? db`; el puerto de dominio nunca lo expone (§5). |
+| Transacción (R6.1) | Desde la aplicación: `unitOfWork.run(async (repositories) => { … })` (§5.1). Dentro, `DrizzleUnitOfWork` usa `db.transaction` y construye los repositorios sobre el `tx`. Ningún repositorio abre transacciones por su cuenta. |
 | Lista de estados en SQL | Siempre desde las constantes: `inArray(operations.status, [...SETTLEABLE_STATUSES])`, `eq(operations.status, OperationStatus.PROCESSING)`; nunca `'PROCESSING'` escrito a mano (§2.1). |
 
 **Prohibido** en idempotencia, transiciones y saldo, se use el builder o SQL crudo:

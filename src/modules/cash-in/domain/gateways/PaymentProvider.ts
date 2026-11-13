@@ -29,7 +29,7 @@ export interface ChargeStatusResult {
 }
 
 export interface PaymentProvider {
-  /** idempotencyKey = operation.id. Never retry charge after an ambiguous result. */
+  /** idempotencyKey = operation.id. Nunca reintentar el cobro tras un resultado incierto. */
   charge(req: ChargeRequest): Promise<ChargeResult>;
   getChargeStatus(idempotencyKey: string): Promise<ChargeStatusResult>;
 }

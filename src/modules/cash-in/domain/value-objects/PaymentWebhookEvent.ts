@@ -18,7 +18,7 @@ interface DeclinedWebhookEvent extends WebhookEventData {
   providerChargeId?: string;
 }
 
-/** Validated input. HTTP/application validation of approvals belongs to T8. */
+/** Entrada ya validada por la capa HTTP: una aprobación siempre trae providerChargeId. */
 export type PaymentWebhookEvent = ApprovedWebhookEvent | DeclinedWebhookEvent;
 
 export const toSettleOutcome = (event: PaymentWebhookEvent): SettleOutcome => {

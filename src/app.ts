@@ -6,16 +6,17 @@ import type { HttpModule } from './shared/infrastructure/http/HttpModule.ts';
 import { errorHandler } from './shared/infrastructure/http/middlewares/errorHandler.ts';
 import { notFound } from './shared/infrastructure/http/middlewares/notFound.ts';
 import { createRequestId } from './shared/infrastructure/http/middlewares/requestId.ts';
+import { captureRawBody } from './shared/infrastructure/http/rawBody.ts';
 import type { Logger } from 'pino';
 
-/**
- * Builds the Express app and mounts the given modules at the root.
- * The modules are created by the caller (main.ts in production, each test in tests).
- */
 export interface AppOptions {
   logger?: Logger;
 }
 
+/**
+ * Construye la app de Express y monta en la raíz los módulos recibidos.
+ * Los módulos los crea quien llama (main.ts en producción, cada test en los tests).
+ */
 export const createApp = (modules: HttpModule[], options: AppOptions = {}): Express => {
   const app = express();
 
@@ -23,7 +24,8 @@ export const createApp = (modules: HttpModule[], options: AppOptions = {}): Expr
   app.use(createRequestId(options.logger));
   app.use(helmet());
   app.use(cors({ origin: env.CORS_ORIGIN }));
-  app.use(express.json());
+  // Se guarda también el body crudo: la firma de los webhooks se verifica sobre esos bytes.
+  app.use(express.json({ verify: captureRawBody }));
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });

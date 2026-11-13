@@ -14,7 +14,7 @@ const envSchema = z.object({
   RECONCILE_AFTER_MS: z.coerce.number().int().positive().default(30000),
   RECONCILE_LEASE_MS: z.coerce.number().int().positive().default(60000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
-  // '*' or a comma-separated list: "https://app.com,http://localhost:5173"
+  // '*' o una lista separada por comas: "https://app.com,http://localhost:5173"
   CORS_ORIGIN: z
     .string()
     .default('*')
@@ -23,7 +23,7 @@ const envSchema = z.object({
 
 export type Env = z.infer<typeof envSchema>;
 
-/** Validates the given variables. Throws listing every invalid one. */
+/** Valida las variables recibidas. Si alguna es inválida, lanza un error que las lista todas. */
 export const loadEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
   const result = envSchema.safeParse(source);
   if (!result.success) {
@@ -32,7 +32,7 @@ export const loadEnv = (source: NodeJS.ProcessEnv = process.env): Env => {
   return result.data;
 };
 
-// Fail fast: don't start the app with a bad configuration.
+// Fallar rápido: no arrancar la app con una configuración inválida.
 const init = (): Env => {
   try {
     return loadEnv();

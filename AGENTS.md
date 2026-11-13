@@ -73,7 +73,9 @@ src/
         │   ├── value-objects/ # Valores y reglas puras: "enums" as const, máquina de estados, Money…
         │   ├── repositories/  # Puertos de persistencia (interfaces TS) que la infraestructura implementa
         │   └── gateways/      # Puertos hacia sistemas externos (p. ej. la pasarela de pagos)
-        ├── application/       # Casos de uso: orquestan el dominio
+        ├── application/       # TODA la lógica de orquestación: se lee paso a paso
+        │   ├── ports/         # Puertos de la aplicación (p. ej. UnitOfWork: varias escrituras en una transacción)
+        │   ├── services/      # Pasos reutilizados por varios casos de uso (p. ej. settleOperation)
         │   ├── use-cases/     # Una clase por caso de uso con método execute()
         │   └── dtos/          # Tipos de entrada/salida + mapeo entidad → DTO
         └── infrastructure/    # Adaptadores: detalles técnicos intercambiables
@@ -102,12 +104,19 @@ infrastructure  →  application  →  domain
 
 - **Nombres de archivo**: clases e interfaces en `PascalCase.ts` (`CreateUser.ts`, `UserRepository.ts`); funciones/fábricas en `camelCase.ts` (`userRoutes.ts`, `errorHandler.ts`).
 - **Tipado**: nada de `any`; para datos externos sin validar usa `unknown` y valida en la entidad. Tipa explícitamente los retornos de funciones públicas. Los puertos son `interface` y los adaptadores usan `implements`.
+- **Idioma**: los **comentarios y la documentación van en español**; los identificadores (variables, funciones, clases, archivos) y los mensajes de la API, en inglés.
+- **Helpers y utilidades**: nunca sueltos entre el código de una clase o servicio. Si los usa una sola clase, van como **métodos privados** de esa clase. Si los usan varios archivos, van en **un archivo propio** con nombre descriptivo (p. ej. `shared/utils/withTimeout.ts`, `shared/infrastructure/db/sqlTime.ts`, `infrastructure/persistence/operationMapper.ts`).
 - **Legibilidad**:
   - Una idea por línea. Si una expresión combina varias decisiones (condiciones compuestas, consultas con `and`/`or` anidados, cálculos), cada parte va a una constante con nombre que diga qué significa.
   - Las firmas públicas usan **tipos con nombre**, no objetos anónimos en línea.
   - El formato lo imponen Prettier y ESLint; no se discute a mano.
 - **Archivos de puertos** (`repositories/`, `gateways/`): contienen la `interface` y los tipos de **su** contrato (parámetros y resultados). Los conceptos de dominio que usan viven en `value-objects/` o `entities/`. Sin reexportaciones (`export type { X } from …`).
 - **Adaptadores**: solo traducen entre el dominio y la tecnología. Nada de reglas de negocio ni validación de entrada dentro de un repositorio o gateway.
+- **Repositorios vs. casos de uso**:
+  - Un método de repositorio es **una sentencia atómica** con un nombre que dice qué hace (`insertIfKeyIsNew`, `changeStatus`, `credit`). No abre transacciones ni combina varias tablas para cumplir una regla de negocio.
+  - Cuando un caso de uso necesita varios pasos atómicos, los escribe en orden dentro de `unitOfWork.run(async (repositories) => { … })`.
+  - Las garantías de concurrencia sí van en SQL (`ON CONFLICT`, `WHERE status IN`, `balance + x`, `SKIP LOCKED`), pero los valores que deciden (qué estados, qué monto) los pasa el caso de uso.
+  - Nunca se llama a un sistema externo dentro de `run`.
 - **Casos de uso**: una clase por caso, constructor con objeto de dependencias tipado `{ userRepository, ... }` (campos `private readonly`), único método público `async execute(input): Promise<Dto>`. Devuelven DTOs, nunca entidades.
 - **Entidades**: constructor `private`; `static create(...)` valida invariantes y lanza `ValidationError` con `details: FieldError[]`; `static restore(...)` rehidrata desde persistencia sin validar. Propiedades `readonly`.
 - **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/errorStatusMap.ts`. No construir respuestas de error a mano en los controllers.

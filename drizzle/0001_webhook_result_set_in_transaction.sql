@@ -1,0 +1,1 @@
+ALTER TABLE "webhook_events" ALTER COLUMN "result" DROP NOT NULL;

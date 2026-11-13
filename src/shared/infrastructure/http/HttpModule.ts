@@ -1,6 +1,6 @@
 import type { Router } from 'express';
 
-/** Contract every feature module exposes to the app. */
+/** Contrato que cada módulo expone a la app. */
 export interface HttpModule {
   basePath: string;
   router: Router;

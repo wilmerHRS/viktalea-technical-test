@@ -22,7 +22,7 @@ export const createDb = (config: DbConfig): DbConnection => {
     database: config.DB_NAME,
     connectionTimeoutMillis: DB_CONNECTION_TIMEOUT_MS,
   });
-  // pg removes the failed idle client; the pool can open a fresh connection on the next query.
+  // pg descarta la conexión inactiva caída; el pool abre una nueva en la siguiente consulta.
   pool.on('error', (err) => {
     logger.error({ err }, 'Idle database connection failed');
   });
@@ -31,3 +31,5 @@ export const createDb = (config: DbConfig): DbConnection => {
 
 export type Db = ReturnType<typeof drizzle<typeof schema>>;
 export type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+/** Cualquier cosa que ejecute consultas: el cliente del pool o una transacción abierta. */
+export type DbExecutor = Db | Tx;

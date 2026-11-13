@@ -12,7 +12,7 @@ export const toCents = (amount: unknown): number => {
   }
   const scaled = amount * CENTS_PER_UNIT;
   const cents = Math.round(scaled);
-  // Accept only floating-point representation noise (e.g. 0.1 + 0.2), never a fractional cent.
+  // Solo se tolera el ruido de coma flotante (p. ej. 0.1 + 0.2), nunca una fracción de céntimo.
   const representationNoise = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4;
   const tolerance = Math.min(1e-6, representationNoise);
   const isPositiveSafeInteger = Number.isSafeInteger(cents) && cents > 0;

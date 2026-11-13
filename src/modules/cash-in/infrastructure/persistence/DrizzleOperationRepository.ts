@@ -1,205 +1,102 @@
-import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { NotFoundError } from '../../../../shared/domain/errors/index.ts';
-import type { Db, Tx } from '../../../../shared/infrastructure/db/client.ts';
-import { Operation, type NewOperation } from '../../domain/entities/Operation.ts';
+import { and, eq, inArray, isNull, lt, or } from 'drizzle-orm';
+import type { DbExecutor } from '../../../../shared/infrastructure/db/client.ts';
+import {
+  millisecondsAgo,
+  millisecondsFromNow,
+  NOW,
+} from '../../../../shared/infrastructure/db/sqlTime.ts';
+import type { NewOperation, Operation } from '../../domain/entities/Operation.ts';
 import type {
+  LeaseCriteria,
   OperationRepository,
-  ClaimResult,
-  SettleResult,
-  ApplyWebhookEventResult,
+  StatusChange,
 } from '../../domain/repositories/OperationRepository.ts';
-import type { SettleOutcome } from '../../domain/value-objects/SettleOutcome.ts';
-import {
-  toSettleOutcome,
-  type PaymentWebhookEvent,
-} from '../../domain/value-objects/PaymentWebhookEvent.ts';
-import {
-  OperationStatus,
-  SETTLEABLE_STATUSES,
-} from '../../domain/value-objects/OperationStatus.ts';
-import {
-  classifyWebhookResult,
-  WebhookEventResult,
-} from '../../domain/value-objects/WebhookEventResult.ts';
-import { ledgerEntries, operations, wallets, webhookEvents } from './schema.ts';
-
-type OperationRow = typeof operations.$inferSelect;
-type Executor = Db | Tx;
-
-interface RepositoryDependencies {
-  db: Db;
-}
-
-const millisecondsAgo = (ms: number) => sql`now() - ${ms} * interval '1 millisecond'`;
-const millisecondsFromNow = (ms: number) => sql`now() + ${ms} * interval '1 millisecond'`;
-
-const toOperation = (row: OperationRow, newBalanceCents: number | null = null): Operation =>
-  Operation.restore({ ...row, newBalanceCents });
+import { OperationStatus } from '../../domain/value-objects/OperationStatus.ts';
+import { toOperation } from './operationMapper.ts';
+import { ledgerEntries, operations } from './schema.ts';
 
 export class DrizzleOperationRepository implements OperationRepository {
-  private readonly db: Db;
+  private readonly db: DbExecutor;
 
-  constructor({ db }: RepositoryDependencies) {
+  /** `db` es el cliente compartido o la transacción de la unidad de trabajo actual. */
+  constructor(db: DbExecutor) {
     this.db = db;
   }
 
-  private selectOperationWithBalance(executor: Executor) {
-    return executor
-      .select({ row: operations, balance: ledgerEntries.balanceAfterCents })
-      .from(operations)
-      .leftJoin(ledgerEntries, eq(ledgerEntries.operationId, operations.id));
-  }
-
-  async claim(input: NewOperation): Promise<ClaimResult> {
-    return this.db.transaction(async (tx) => {
-      await tx.insert(wallets).values({ userId: input.userId }).onConflictDoNothing();
-      const [inserted] = await tx
-        .insert(operations)
-        .values({ ...input, status: OperationStatus.PROCESSING })
-        .onConflictDoNothing({ target: operations.idempotencyKey })
-        .returning();
-      if (inserted) {
-        return { created: true, operation: toOperation(inserted) };
-      }
-      const [existing] = await this.selectOperationWithBalance(tx).where(
-        eq(operations.idempotencyKey, input.idempotencyKey),
-      );
-      if (!existing) {
-        throw new NotFoundError('Cash-in operation not found');
-      }
-      return { created: false, operation: toOperation(existing.row, existing.balance) };
-    });
+  async insertIfKeyIsNew(operation: NewOperation): Promise<Operation | null> {
+    // ON CONFLICT DO NOTHING: si otra request (de cualquier pod) tiene la key, este INSERT
+    // espera a que confirme y luego no inserta nada.
+    const [inserted] = await this.db
+      .insert(operations)
+      .values({ ...operation, status: OperationStatus.PROCESSING })
+      .onConflictDoNothing({ target: operations.idempotencyKey })
+      .returning();
+    return inserted ? toOperation(inserted) : null;
   }
 
   async findById(id: string): Promise<Operation | null> {
-    const [found] = await this.selectOperationWithBalance(this.db).where(eq(operations.id, id));
-    return found ? toOperation(found.row, found.balance) : null;
+    const [found] = await this.selectWithBalance().where(eq(operations.id, id));
+    return found ? toOperation(found.operation, found.balanceAfterCents) : null;
   }
 
-  async markUnknown(id: string): Promise<void> {
-    const isOperation = eq(operations.id, id);
-    const isProcessing = eq(operations.status, OperationStatus.PROCESSING);
-    await this.db
-      .update(operations)
-      .set({ status: OperationStatus.UNKNOWN, updatedAt: sql`now()` })
-      .where(and(isOperation, isProcessing));
+  async findByIdempotencyKey(idempotencyKey: string): Promise<Operation | null> {
+    const isSameKey = eq(operations.idempotencyKey, idempotencyKey);
+    const [found] = await this.selectWithBalance().where(isSameKey);
+    return found ? toOperation(found.operation, found.balanceAfterCents) : null;
   }
 
-  async settle(id: string, outcome: SettleOutcome): Promise<SettleResult> {
-    return this.db.transaction((tx) => this.settleInTransaction(tx, id, outcome));
-  }
+  async changeStatus(id: string, change: StatusChange): Promise<Operation | null> {
+    const isThisOperation = eq(operations.id, id);
+    const isInAllowedStatus = inArray(operations.status, change.from);
 
-  private async settleInTransaction(
-    tx: Tx,
-    id: string,
-    outcome: SettleOutcome,
-  ): Promise<SettleResult> {
-    const isOperation = eq(operations.id, id);
-    const isSettleable = inArray(operations.status, SETTLEABLE_STATUSES);
-    const providerChargeId =
-      outcome.status === OperationStatus.COMPLETED ? outcome.providerChargeId : null;
-    const failureReason = outcome.status === OperationStatus.FAILED ? outcome.reason : null;
-    const [changed] = await tx
+    // El WHERE vuelve a comprobar el estado después de tomar el lock de la fila: si dos
+    // procesos compiten, el segundo encuentra el estado nuevo y no actualiza nada.
+    const [changed] = await this.db
       .update(operations)
       .set({
-        status: outcome.status,
-        providerChargeId,
-        failureReason,
-        updatedAt: sql`now()`,
+        status: change.to,
+        providerChargeId: change.providerChargeId,
+        failureReason: change.failureReason,
+        updatedAt: NOW,
       })
-      .where(and(isOperation, isSettleable))
+      .where(and(isThisOperation, isInAllowedStatus))
       .returning();
-
-    if (!changed) {
-      const [existing] = await this.selectOperationWithBalance(tx).where(isOperation);
-      if (!existing) {
-        throw new NotFoundError('Cash-in operation not found');
-      }
-      return { applied: false, operation: toOperation(existing.row, existing.balance) };
-    }
-    if (outcome.status === OperationStatus.FAILED) {
-      return { applied: true, operation: toOperation(changed) };
-    }
-    const [wallet] = await tx
-      .update(wallets)
-      .set({
-        balanceCents: sql`${wallets.balanceCents} + ${changed.amountCents}`,
-        updatedAt: sql`now()`,
-      })
-      .where(eq(wallets.userId, changed.userId))
-      .returning({ balance: wallets.balanceCents });
-    if (!wallet) {
-      throw new NotFoundError('Wallet not found');
-    }
-    await tx.insert(ledgerEntries).values({
-      operationId: id,
-      userId: changed.userId,
-      amountCents: changed.amountCents,
-      balanceAfterCents: wallet.balance,
-    });
-    return { applied: true, operation: toOperation(changed, wallet.balance) };
+    return changed ? toOperation(changed) : null;
   }
 
-  async leasePendingBatch(
-    olderThanMs: number,
-    leaseMs: number,
-    limit: number,
-  ): Promise<Operation[]> {
+  async leasePendingBatch(criteria: LeaseCriteria): Promise<Operation[]> {
     const isUnknown = eq(operations.status, OperationStatus.UNKNOWN);
     const isProcessing = eq(operations.status, OperationStatus.PROCESSING);
-    const isStale = lt(operations.updatedAt, millisecondsAgo(olderThanMs));
-    const isStaleProcessing = and(isProcessing, isStale);
-    const isUnreserved = isNull(operations.reconcileLockedUntil);
-    const isLeaseExpired = lt(operations.reconcileLockedUntil, sql`now()`);
-    const isLeaseFree = or(isUnreserved, isLeaseExpired);
-    const isPending = or(isUnknown, isStaleProcessing);
+    const isStale = lt(operations.updatedAt, millisecondsAgo(criteria.staleAfterMs));
+    const needsReconciling = or(isUnknown, and(isProcessing, isStale));
 
-    // Commit the reservation before returning, without external I/O or changes to updated_at.
-    return this.db.transaction(async (tx) => {
-      const candidates = tx
-        .select({ id: operations.id })
-        .from(operations)
-        .where(and(isPending, isLeaseFree))
-        .orderBy(operations.updatedAt)
-        .limit(limit)
-        .for('update', { skipLocked: true });
-      const reserved = await tx
-        .update(operations)
-        .set({ reconcileLockedUntil: millisecondsFromNow(leaseMs) })
-        .where(inArray(operations.id, candidates))
-        .returning();
-      return reserved.map((row) => toOperation(row));
-    });
+    const hasNoLease = isNull(operations.reconcileLockedUntil);
+    const hasExpiredLease = lt(operations.reconcileLockedUntil, NOW);
+    const isLeaseFree = or(hasNoLease, hasExpiredLease);
+
+    // SKIP LOCKED: las filas que otro pod está reservando ahora se saltan, no se esperan.
+    const candidateIds = this.db
+      .select({ id: operations.id })
+      .from(operations)
+      .where(and(needsReconciling, isLeaseFree))
+      .orderBy(operations.updatedAt)
+      .limit(criteria.limit)
+      .for('update', { skipLocked: true });
+
+    // Solo cambia la columna del lease: updated_at sigue midiendo cuánto lleva atascada.
+    const reserved = await this.db
+      .update(operations)
+      .set({ reconcileLockedUntil: millisecondsFromNow(criteria.leaseMs) })
+      .where(inArray(operations.id, candidateIds))
+      .returning();
+    return reserved.map((row) => toOperation(row));
   }
 
-  async applyWebhookEvent(event: PaymentWebhookEvent): Promise<ApplyWebhookEventResult> {
-    return this.db.transaction(async (tx) => {
-      const inserted = await tx
-        .insert(webhookEvents)
-        .values({
-          eventId: event.eventId,
-          operationId: event.operationId,
-          status: event.status,
-          result: WebhookEventResult.IGNORED,
-          payload: event.payload,
-        })
-        .onConflictDoNothing({ target: webhookEvents.eventId })
-        .returning({ eventId: webhookEvents.eventId });
-      if (inserted.length === 0) {
-        return { duplicate: true };
-      }
-      const outcome = toSettleOutcome(event);
-      const settlement = await this.settleInTransaction(tx, event.operationId, outcome);
-      const result = classifyWebhookResult({
-        applied: settlement.applied,
-        eventStatus: event.status,
-        finalStatus: settlement.operation.status,
-      });
-      await tx
-        .update(webhookEvents)
-        .set({ result })
-        .where(eq(webhookEvents.eventId, event.eventId));
-      return { duplicate: false, result, operation: settlement.operation };
-    });
+  /** La operación más el saldo que quedó en el ledger cuando se acreditó (si se acreditó). */
+  private selectWithBalance() {
+    return this.db
+      .select({ operation: operations, balanceAfterCents: ledgerEntries.balanceAfterCents })
+      .from(operations)
+      .leftJoin(ledgerEntries, eq(ledgerEntries.operationId, operations.id));
   }
 }

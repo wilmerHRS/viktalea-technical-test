@@ -81,7 +81,8 @@ export const webhookEvents = pgTable(
     eventId: text('event_id').primaryKey(),
     operationId: text('operation_id').notNull(),
     status: text('status').notNull(),
-    result: text('result').$type<WebhookEventResult>().notNull(),
+    // NULL solo dentro de la transacción que inserta el evento; se completa antes del commit.
+    result: text('result').$type<WebhookEventResult>(),
     payload: jsonb('payload').notNull(),
     receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
   },
