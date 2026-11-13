@@ -53,3 +53,6 @@ Se integraron Drizzle y pg, las cuatro tablas con la columna de lease, migracion
 
 ### T2 — Limpieza y observabilidad
 Se eliminó users y sus tests, se montan módulos en la raíz y se agregó pino con req.log y requestId. Se permite inyectar el logger en createApp para verificar el JSON sin capturar stdout global. typecheck y 36 tests pasan; el menor total se debe a quitar los tests del módulo de ejemplo. Sin desviaciones del spec. Se corrigieron saltos de línea literales en la entrada T1 del registro.
+
+### T3 — Dominio
+Se implementaron las 16 combinaciones de transición, mapeo API, entidad con create/restore, puertos y Money. La conversión admite exclusivamente ruido de representación binaria (0.1 + 0.2), rechaza fracciones de céntimo como 1.005 y números no representables como enteros seguros en JS, coherente con bigint mode number. No se introduce un límite comercial de recarga. El puerto no importa tipos Drizzle; tx opcional pertenece al adaptador de T4. typecheck y 71 tests pasan. Sin desviaciones del spec.

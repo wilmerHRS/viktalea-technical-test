@@ -41,7 +41,7 @@
   - Middleware `requestId`: usa `X-Request-Id` si viene o genera un UUID, lo devuelve en la respuesta y lo pone a disposición del logger de la request.
   - **Acepta cuando**: `GET /health` responde con el header `X-Request-Id` (eco si se envía uno), y los logs salen en JSON con `requestId`.
 
-- [ ] **T3. Dominio**: R3, R6.4, R1.3
+- [x] **T3. Dominio**: R3, R6.4, R1.3
   - `OperationStatus.ts` (`canTransition`, `toApiStatus`), `Operation.ts`, `Money.ts` (`toCents`, `fromCents` y rechazo de más de 2 decimales).
   - Puertos `OperationRepository.ts` y `PaymentProvider.ts` exactamente como en design §5.
   - **Acepta cuando**: hay tests unitarios de todas las transiciones válidas e inválidas (R3.2, R3.3) y de `Money` (100.00 ↔ 10000, 0.1 + 0.2, 1.005 rechazado).
