@@ -46,7 +46,7 @@
   - Puertos `OperationRepository.ts` y `PaymentProvider.ts` exactamente como en design §5.
   - **Acepta cuando**: hay tests unitarios de todas las transiciones válidas e inválidas (R3.2, R3.3) y de `Money` (100.00 ↔ 10000, 0.1 + 0.2, 1.005 rechazado).
 
-- [ ] **T4. Repositorio con Drizzle**: R2.1, R2.5, R3.4, R6.1–R6.3, NFR3
+- [x] **T4. Repositorio con Drizzle**: R2.1, R2.5, R3.4, R6.1–R6.3, NFR3
   - `DrizzleOperationRepository`: `claim`, `findById`, `markUnknown`, `settle(…, tx?)`, `leasePendingBatch`, `recordWebhookEvent(…, tx?)` según design §6, escritos con las construcciones de design §6.5. Mapea las filas de Drizzle a la entidad `Operation`: el dominio no importa nada de Drizzle.
   - **Acepta cuando** hay tests de integración que demuestran:
     - (a) dos `claim` concurrentes con la misma key crean una sola fila;
