@@ -15,6 +15,9 @@ export interface AppOptions {
   logger?: Logger;
 }
 
+/** Headers de respuesta que un cliente web necesita leer. */
+export const CORS_EXPOSED_HEADERS = ['Retry-After', 'X-Request-Id'];
+
 /**
  * Construye la app de Express y monta en la raíz los módulos recibidos.
  * Los módulos los crea quien llama (main.ts en producción, cada test en los tests).
@@ -25,7 +28,9 @@ export const createApp = (modules: HttpModule[], options: AppOptions = {}): Expr
   app.disable('x-powered-by');
   app.use(createRequestId(options.logger));
   app.use(helmet());
-  app.use(cors({ origin: env.CORS_ORIGIN }));
+  // Un navegador solo deja leer a JavaScript los headers que el servidor expone por CORS: sin
+  // esto, una app web no vería Retry-After (cuándo reintentar) ni el X-Request-Id.
+  app.use(cors({ origin: env.CORS_ORIGIN, exposedHeaders: CORS_EXPOSED_HEADERS }));
   // Se guarda también el body crudo: la firma de los webhooks se verifica sobre esos bytes.
   app.use(express.json({ verify: captureRawBody }));
 
