@@ -78,6 +78,26 @@
      - `X-Request-Id` entrante: aceptarlo solo si cumple `^[A-Za-z0-9._-]{1,128}$`; si no, generar un UUID nuevo. Añadir un test.
   - **Acepta cuando**: `npm run typecheck` y `npm test` pasan; el grep `grep -rnE "'(PROCESSING|UNKNOWN|COMPLETED|FAILED|PEN|applied|ignored|conflict)'" src` solo encuentra las **definiciones** de las constantes; `domain/` no importa nada de `infrastructure/`, de Drizzle ni de Express; y `npm run db:generate` informa que no hay cambios.
 
+- [ ] **T4.2. Legibilidad, formato y contratos con nombre** (hacer antes de T5): design §2.2
+  > Origen: revisión humana de T4.1. Hay 101 líneas de más de 100 caracteres (hasta 146) en 19 archivos, condiciones SQL anidadas en una sola expresión, tipos anónimos en las firmas de los puertos y lógica de negocio en el repositorio. Causa raíz: el proyecto no tiene formatter ni linter. **No cambia el comportamiento**: los 106 tests existentes deben seguir pasando.
+  1. **Herramientas.**
+     - Instalar y configurar Prettier y ESLint (`typescript-eslint`, flat config `eslint.config.js`) según design §2.2.1.
+     - Añadir los scripts `format`, `format:check` y `lint`, y un `.prettierignore` (`drizzle/`, `dist/`, `node_modules/`, `package-lock.json`).
+     - Ejecutar `npm run format` sobre `src/` y `tests/`, en un **commit aparte, solo de formato**, para que el diff de lógica quede limpio.
+  2. **Puertos** (design §2.2.3 y §2.2.4):
+     - Mover `SettleOutcome` y `PaymentWebhookEvent` a `domain/value-objects/` (por ejemplo `SettleOutcome.ts` y `PaymentWebhookEvent.ts`).
+     - Declarar con nombre los resultados del puerto: `ClaimResult`, `SettleResult` y `ApplyWebhookEventResult` en `OperationRepository.ts`; `ChargeRequest` y `ChargeStatusResult` en `PaymentProvider.ts`.
+     - Eliminar `export type { NewOperation } from …`: se importa desde `entities/Operation.ts`.
+  3. **`DrizzleOperationRepository`** (design §2.2.2 y §2.2.5):
+     - Condiciones SQL del lease como constantes con nombre: `isUnknown`, `isStaleProcessing`, `isLeaseFree`. Helpers `millisecondsAgo(ms)` y `millisecondsFromNow(ms)` para las expresiones de intervalo.
+     - Extraer la consulta repetida "operación + saldo" a un método privado `selectOperationWithBalance(executor)`.
+     - `settle` público que abre la transacción y `settleInTransaction(tx, …)` privado con la lógica; `applyWebhookEvent` usa el privado. Se elimina la llamada recursiva.
+     - Renombrar `restore` del adaptador a `toOperation(row, newBalanceCents)`.
+     - Sacar la lógica de negocio: la conversión evento → `SettleOutcome` pasa a una función de dominio `toSettleOutcome(event)` en `value-objects/`, con test unitario. La validación "`provider_charge_id` obligatorio si `approved`" sale del repositorio y queda anotada para T8 (capa HTTP o de aplicación). El repositorio deja de lanzar `ValidationError`.
+     - Tipo de retorno de `applyWebhookEvent` con su nombre (`ApplyWebhookEventResult`), no con `ReturnType<…>`.
+  4. **Resto del proyecto**: aplicar §2.2.2 (valores con nombre) donde el formatter no basta. Por ejemplo, los mensajes de error largos de `Money.ts` y `errorHandler.ts` pasan a constantes con nombre, y los tests extraen sus fixtures y valores esperados a variables descriptivas en lugar de literales en línea.
+  - **Acepta cuando**: `npm run typecheck`, `npm run lint`, `npm run format:check` y `npm test` pasan; `awk 'length > 100'` sobre `src/` y `tests/` no devuelve líneas, salvo URLs o strings que no se pueden partir (justificar cada una en el reporte); `domain/repositories/` y `domain/gateways/` no contienen tipos de objeto anónimos en las firmas ni reexportaciones; `DrizzleOperationRepository` no importa `ValidationError`.
+
 - [ ] **T5. Pasarela falsa**: R4
   - `FakePaymentProvider` según design §8: idempotente por key, `nextOutcome`, `chargeCount`, `setDelay` y el mapeo de `payment_method` para runtime.
   - Errores `ProviderTimeoutError` y `ProviderUnavailableError`. El timeout lo aplica `CreateCashIn` con `PROVIDER_TIMEOUT_MS` (`AbortSignal.timeout` o `Promise.race`).

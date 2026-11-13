@@ -30,6 +30,8 @@ Spec activo: [`specs/cash-in/`](specs/cash-in/) (challenge Wallet Cash-In).
 |---|---|
 | `npm run dev` | `tsx watch` sobre `src/main.ts`, carga `.env` si existe |
 | `npm run typecheck` | `tsc --noEmit` sobre `src/` y `tests/` |
+| `npm run lint` | ESLint (`typescript-eslint`) sobre `src/` y `tests/` |
+| `npm run format` / `npm run format:check` | Prettier: formatea / verifica el formato (ancho máximo 100) |
 | `npm test` | Ejecuta `tests/**/*.test.ts` con `tsx --test` |
 | `npm run build` | Compila `src/` a `dist/` (`tsconfig.build.json`) |
 | `npm start` | Ejecuta `dist/main.js` (requiere `build` previo) |
@@ -42,7 +44,7 @@ Base de datos local: las credenciales están directamente en `docker-compose.yml
 
 Acceso a datos: **Drizzle ORM** (`drizzle-orm` + `pg`, migraciones con `drizzle-kit`). El esquema Drizzle vive en `modules/<module>/infrastructure/persistence/schema.ts`; el dominio nunca importa Drizzle. Usa el query builder por defecto y SQL crudo (`` sql`…` ``, `db.execute`) cuando sea más claro o correcto. Para idempotencia, transiciones de estado y saldo se usan siempre operaciones atómicas en la BD (`onConflictDoNothing`, `UPDATE … WHERE status IN`, `` sql`col + x` ``, `.for('update', { skipLocked: true })`), nunca "leer, comprobar y escribir".
 
-Antes de dar una tarea por terminada: `npm run typecheck && npm test`.
+Antes de dar una tarea por terminada: `npm run typecheck && npm run lint && npm run format:check && npm test`.
 
 Variables de entorno: ver `.env.example` (`NODE_ENV`, `PORT`, `CORS_ORIGIN`). Se leen **solo** en `src/config/env.ts`, que las valida con un esquema **zod** al arrancar. Si alguna es inválida, la app no inicia y muestra cuál falla. El resto del código importa `env` (tipado, p. ej. `env.PORT`). Para añadir una variable: agrégala al `envSchema` (con `.default()` si es opcional), a `.env.example` y a `tests/config/env.test.ts`. Mantén el esquema simple, sin reglas condicionales.
 
@@ -100,6 +102,12 @@ infrastructure  →  application  →  domain
 
 - **Nombres de archivo**: clases e interfaces en `PascalCase.ts` (`CreateUser.ts`, `UserRepository.ts`); funciones/fábricas en `camelCase.ts` (`userRoutes.ts`, `errorHandler.ts`).
 - **Tipado**: nada de `any`; para datos externos sin validar usa `unknown` y valida en la entidad. Tipa explícitamente los retornos de funciones públicas. Los puertos son `interface` y los adaptadores usan `implements`.
+- **Legibilidad**:
+  - Una idea por línea. Si una expresión combina varias decisiones (condiciones compuestas, consultas con `and`/`or` anidados, cálculos), cada parte va a una constante con nombre que diga qué significa.
+  - Las firmas públicas usan **tipos con nombre**, no objetos anónimos en línea.
+  - El formato lo imponen Prettier y ESLint; no se discute a mano.
+- **Archivos de puertos** (`repositories/`, `gateways/`): contienen la `interface` y los tipos de **su** contrato (parámetros y resultados). Los conceptos de dominio que usan viven en `value-objects/` o `entities/`. Sin reexportaciones (`export type { X } from …`).
+- **Adaptadores**: solo traducen entre el dominio y la tecnología. Nada de reglas de negocio ni validación de entrada dentro de un repositorio o gateway.
 - **Casos de uso**: una clase por caso, constructor con objeto de dependencias tipado `{ userRepository, ... }` (campos `private readonly`), único método público `async execute(input): Promise<Dto>`. Devuelven DTOs, nunca entidades.
 - **Entidades**: constructor `private`; `static create(...)` valida invariantes y lanza `ValidationError` con `details: FieldError[]`; `static restore(...)` rehidrata desde persistencia sin validar. Propiedades `readonly`.
 - **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/errorStatusMap.ts`. No construir respuestas de error a mano en los controllers.

@@ -89,6 +89,25 @@ Decisiones:
 4. **Las reglas derivadas salen de su fuente.** La lista de estados liquidables (`SETTLEABLE_STATUSES = ['PROCESSING','UNKNOWN']`) se deriva de la tabla de transiciones de `OperationStatus`, y el repositorio la usa en su `WHERE status IN (…)`. Así la máquina de estados del dominio y el SQL no pueden divergir.
 5. **Los errores de dominio no conocen HTTP.** `AppError` y sus subclases llevan un `code` (`VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, …) pero **no** un `statusCode`. La traducción a HTTP la hace `shared/infrastructure/http/errorStatusMap.ts` en el `errorHandler`.
 
+### 2.2 Legibilidad y formato [decisión humana, revisión de T4.1]
+
+1. **El formato lo impone una herramienta, no la buena voluntad.**
+   - Prettier (`printWidth: 100`, `singleQuote: true`, `trailingComma: 'all'`) para el formato.
+   - ESLint con `typescript-eslint` (reglas `recommended`), más `max-statements-per-line: 1`, `curly: all`, `no-nested-ternary` y `max-depth: 3`.
+   - Scripts `npm run format`, `npm run format:check` y `npm run lint`. Una tarea no está terminada si `lint` o `format:check` fallan.
+2. **Una idea por línea; valores con nombre.**
+   - Si una expresión mezcla varias decisiones (por ejemplo `or(eq(…), and(eq(…), lt(…)))` o una condición de varias partes), cada parte va a una constante con nombre que diga **qué significa**: `isUnknown`, `isStaleProcessing`, `isLeaseFree`.
+   - No se pasan literales sin nombre como argumentos posicionales cuando su significado no es obvio en el sitio de la llamada.
+3. **Tipos con nombre en las firmas públicas.** Los puertos y los métodos públicos no declaran tipos de objeto anónimos en línea (`Promise<{ created: boolean; operation: Operation }>`). Se declaran con nombre: `ClaimResult`, `SettleResult`, `ChargeRequest`, `ChargeStatusResult`, etc.
+4. **Qué contiene cada archivo de puerto** (`repositories/*.ts`, `gateways/*.ts`):
+   - La `interface` y los tipos de **su propio contrato** (parámetros y resultados).
+   - Los conceptos de dominio que el puerto usa pero no le pertenecen (`SettleOutcome`, `PaymentWebhookEvent`) viven en `value-objects/` y se importan desde ahí.
+   - Sin reexportaciones (`export type { X } from …`): cada tipo se importa desde el archivo que lo define.
+5. **Los adaptadores solo traducen.**
+   - Un repositorio no decide reglas de negocio ni valida la entrada. Por ejemplo: "un evento `approved` liquida como `COMPLETED`" es una función de dominio (`toSettleOutcome(event)` en `value-objects/`), y "`provider_charge_id` es obligatorio si `approved`" se valida en la capa HTTP o de aplicación (T8).
+   - Dentro del adaptador, las consultas repetidas se extraen a métodos privados con nombre (por ejemplo `selectOperationWithBalance`), y las expresiones SQL repetidas a helpers (`millisecondsAgo(ms)`).
+   - Los métodos que abren una transacción no se llaman a sí mismos para reutilizarla: método público que abre la transacción y método privado `…InTransaction(tx, …)` con la lógica.
+
 ## 3. Modelo de datos
 
 Se define en `modules/cash-in/infrastructure/persistence/schema.ts` con `pgTable`, usando `check()`, `unique()` e índices parciales con `.where(sql\`…\`)`. Usa `bigint('…', { mode: 'number' })` para los céntimos y `timestamp('…', { withTimezone: true })`. La migración generada por `drizzle-kit` **debe producir este esquema**; si difiere, se corrige el `schema.ts`, no el SQL a mano:
