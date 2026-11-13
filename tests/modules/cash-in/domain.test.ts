@@ -1,8 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { canTransition, toApiStatus, OperationStatus } from '../../../src/modules/cash-in/domain/OperationStatus.ts';
-import { toCents, fromCents } from '../../../src/modules/cash-in/domain/Money.ts';
-import { Operation, type NewOperation } from '../../../src/modules/cash-in/domain/Operation.ts';
+import { canTransition, toApiStatus, OperationStatus, transitions, FINAL_STATUSES, SETTLEABLE_STATUSES } from '../../../src/modules/cash-in/domain/value-objects/OperationStatus.ts';
+import { toCents, fromCents } from '../../../src/modules/cash-in/domain/value-objects/Money.ts';
+import { Operation, type NewOperation } from '../../../src/modules/cash-in/domain/entities/Operation.ts';
+import { classifyWebhookResult } from '../../../src/modules/cash-in/domain/value-objects/WebhookEventResult.ts';
+import { ChargeOutcome } from '../../../src/modules/cash-in/domain/gateways/PaymentProvider.ts';
 import { ValidationError } from '../../../src/shared/domain/errors/index.ts';
 
 describe('OperationStatus (R3)', () => {
@@ -17,6 +19,14 @@ describe('OperationStatus (R3)', () => {
     assert.equal(toApiStatus('UNKNOWN'), 'pending');
     assert.equal(toApiStatus('COMPLETED'), 'completed');
     assert.equal(toApiStatus('FAILED'), 'failed');
+  });
+  it('derives final and settleable states from the transition table', () => {
+    assert.deepEqual(FINAL_STATUSES, ['COMPLETED', 'FAILED']);
+    assert.deepEqual(SETTLEABLE_STATUSES, ['PROCESSING', 'UNKNOWN']);
+    for (const state of Object.values(OperationStatus)) {
+      assert.equal(FINAL_STATUSES.includes(state), transitions[state].length === 0);
+      assert.equal(SETTLEABLE_STATUSES.includes(state), transitions[state].some((target) => FINAL_STATUSES.includes(target)));
+    }
   });
 });
 
@@ -44,7 +54,7 @@ describe('Operation', () => {
     assert.equal(op.newBalanceCents, null);
     assert.equal(op.providerChargeId, null);
     assert.equal(op.failureReason, null);
-    assert.equal(op.reconcileLockedUntil, null);
+    assert.equal('reconcileLockedUntil' in op, false);
     assert.ok(op.createdAt instanceof Date);
   });
   it('reports all invalid business fields', () => {
@@ -55,4 +65,19 @@ describe('Operation', () => {
     const data = { ...Operation.create(input), status: 'COMPLETED' as const, newBalanceCents: 10000 };
     assert.deepEqual({ ...Operation.restore(data) }, data);
   });
+});
+
+describe('classifyWebhookResult (R5.4)', () => {
+  for (const eventStatus of Object.values(ChargeOutcome)) {
+    for (const finalStatus of FINAL_STATUSES) {
+      it(`applied ${eventStatus} -> ${finalStatus}`, () => {
+        assert.equal(classifyWebhookResult({ applied: true, eventStatus, finalStatus }), 'applied');
+      });
+      const expected = (eventStatus === 'approved' && finalStatus === 'COMPLETED') ||
+        (eventStatus === 'declined' && finalStatus === 'FAILED') ? 'ignored' : 'conflict';
+      it(`not applied ${eventStatus} over ${finalStatus} -> ${expected}`, () => {
+        assert.equal(classifyWebhookResult({ applied: false, eventStatus, finalStatus }), expected);
+      });
+    }
+  }
 });

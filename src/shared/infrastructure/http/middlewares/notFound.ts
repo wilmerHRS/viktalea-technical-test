@@ -1,7 +1,9 @@
 import type { RequestHandler } from 'express';
+import { HttpStatus } from '../httpStatus.ts';
+import { HttpErrorCode } from '../errorStatusMap.ts';
 
 export const notFound: RequestHandler = (req, res) => {
-  res.status(404).json({
-    error: { code: 'ROUTE_NOT_FOUND', message: `Route ${req.method} ${req.originalUrl} not found` },
+  res.status(HttpStatus.NOT_FOUND).json({
+    error: { code: HttpErrorCode.ROUTE_NOT_FOUND, message: `Route ${req.method} ${req.originalUrl} not found` },
   });
 };

@@ -4,7 +4,8 @@ import { randomUUID } from 'node:crypto';
 import { eq, sql } from 'drizzle-orm';
 import { env } from '../../../src/config/env.ts';
 import { createDb } from '../../../src/shared/infrastructure/db/client.ts';
-import type { NewOperation } from '../../../src/modules/cash-in/domain/Operation.ts';
+import type { NewOperation } from '../../../src/modules/cash-in/domain/entities/Operation.ts';
+import type { PaymentWebhookEvent } from '../../../src/modules/cash-in/domain/repositories/OperationRepository.ts';
 import { DrizzleOperationRepository } from '../../../src/modules/cash-in/infrastructure/persistence/DrizzleOperationRepository.ts';
 import { operations, wallets, ledgerEntries, webhookEvents } from '../../../src/modules/cash-in/infrastructure/persistence/schema.ts';
 
@@ -129,33 +130,94 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
   });
 
   it('deduplicates webhook events atomically across pools', async () => {
-    const event = { eventId: 'evt_test', operationId: 'op_test', status: 'approved' as const,
-      result: 'ignored' as const, payload: { source: 'test' } };
-    const results = await Promise.all([repo.recordWebhookEvent(event), other.recordWebhookEvent(event)]);
+    const { operation } = await repo.claim(newOperation());
+    const event: PaymentWebhookEvent = { eventId: 'evt_test', operationId: operation.id, status: 'approved',
+      providerChargeId: 'ch_webhook', payload: { source: 'test' } };
+    const results = await Promise.all([repo.applyWebhookEvent(event), other.applyWebhookEvent(event)]);
     assert.equal(results.filter((r) => r.duplicate).length, 1);
+    const winner = results.find((r) => !r.duplicate)!;
+    assert.equal(winner.result, 'applied');
+    assert.equal(winner.operation.status, 'COMPLETED');
+    assert.equal(winner.operation.newBalanceCents, 10000);
     assert.equal((await first.db.select().from(webhookEvents)).length, 1);
+    assert.equal((await first.db.select().from(ledgerEntries)).length, 1);
+    assert.equal((await first.db.select().from(wallets))[0]!.balanceCents, 10000);
+    assert.deepEqual(await other.applyWebhookEvent(event), { duplicate: true });
   });
 
-  it('shares the caller transaction for webhook deduplication and settlement', async () => {
+  it('rolls back event, settlement, balance and ledger if saving the webhook result fails', async () => {
     const { operation } = await repo.claim(newOperation());
-    const event = { eventId: 'evt_atomic', operationId: operation.id, status: 'approved' as const,
-      result: 'ignored' as const, payload: {} };
-    await assert.rejects(first.db.transaction(async (tx) => {
-      assert.equal((await repo.recordWebhookEvent(event, tx)).duplicate, false);
-      await repo.settle(operation.id, approved, tx);
-      throw new Error('Force transaction rollback');
-    }), /Force transaction rollback/);
+    const event: PaymentWebhookEvent = { eventId: 'evt_atomic', operationId: operation.id, status: 'approved',
+      providerChargeId: 'ch_atomic', payload: {} };
+    // Real PostgreSQL fault after settle has updated the operation, wallet and ledger.
+    await first.db.execute(sql`
+      CREATE FUNCTION pg_temp.fail_webhook_result_update() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RAISE EXCEPTION 'Forced webhook result failure'; END; $$;
+      CREATE TRIGGER fail_webhook_result_update BEFORE UPDATE ON webhook_events
+      FOR EACH ROW EXECUTE FUNCTION pg_temp.fail_webhook_result_update();
+    `);
+    try {
+      await assert.rejects(repo.applyWebhookEvent(event));
+    } finally {
+      await first.db.execute(sql`DROP TRIGGER fail_webhook_result_update ON webhook_events`);
+    }
     assert.equal((await first.db.select().from(webhookEvents)).length, 0);
     assert.equal((await first.db.select().from(ledgerEntries)).length, 0);
     assert.equal((await first.db.select().from(wallets))[0]!.balanceCents, 0);
     assert.equal((await repo.findById(operation.id))?.status, 'PROCESSING');
-    await first.db.transaction(async (tx) => {
-      assert.equal((await repo.recordWebhookEvent(event, tx)).duplicate, false);
-      await repo.settle(operation.id, approved, tx);
-      await tx.update(webhookEvents).set({ result: 'applied' }).where(eq(webhookEvents.eventId, event.eventId));
-    });
+    const retried = await other.applyWebhookEvent(event);
+    assert.equal(retried.duplicate, false);
     assert.equal((await repo.findById(operation.id))?.status, 'COMPLETED');
     assert.equal((await first.db.select().from(webhookEvents))[0]!.result, 'applied');
+  });
+
+  it('classifies a declined event over COMPLETED as conflict, preserving the final response', async () => {
+    const { operation } = await repo.claim(newOperation());
+    const final = await repo.settle(operation.id, approved);
+    const result = await other.applyWebhookEvent({ eventId: 'evt_conflict', operationId: operation.id,
+      status: 'declined', payload: {} });
+    assert.equal(result.duplicate, false);
+    if (result.duplicate) assert.fail('First event must be processed');
+    assert.equal(result.result, 'conflict');
+    assert.deepEqual(result.operation, final.operation);
+    assert.equal((await first.db.select().from(webhookEvents))[0]!.result, 'conflict');
+    assert.equal((await first.db.select().from(wallets))[0]!.balanceCents, 10000);
+    assert.equal((await first.db.select().from(ledgerEntries)).length, 1);
+  });
+
+  it('records an agreeing final event as ignored', async () => {
+    const { operation } = await repo.claim(newOperation());
+    await repo.settle(operation.id, approved);
+    const result = await repo.applyWebhookEvent({ eventId: 'evt_agrees', operationId: operation.id,
+      status: 'approved', providerChargeId: 'ch_later', payload: {} });
+    assert.equal(result.duplicate, false);
+    if (result.duplicate) assert.fail('First event must be processed');
+    assert.equal(result.result, 'ignored');
+    assert.equal(result.operation.providerChargeId, approved.providerChargeId);
+    assert.equal((await first.db.select().from(webhookEvents))[0]!.result, 'ignored');
+    assert.equal((await first.db.select().from(ledgerEntries)).length, 1);
+  });
+
+  it('applies a decline without creating a credit', async () => {
+    const { operation } = await repo.claim(newOperation());
+    const result = await repo.applyWebhookEvent({ eventId: 'evt_declined', operationId: operation.id,
+      status: 'declined', payload: {} });
+    assert.equal(result.duplicate, false);
+    if (result.duplicate) assert.fail('First event must be processed');
+    assert.equal(result.result, 'applied');
+    assert.equal(result.operation.status, 'FAILED');
+    assert.equal((await first.db.select().from(wallets))[0]!.balanceCents, 0);
+    assert.equal((await first.db.select().from(ledgerEntries)).length, 0);
+  });
+
+  it('leaves no webhook record for an unknown operation or an invalid approval', async () => {
+    await assert.rejects(repo.applyWebhookEvent({ eventId: 'evt_missing', operationId: 'op_missing',
+      status: 'approved', providerChargeId: 'ch_missing', payload: {} }), /not found/);
+    const { operation } = await repo.claim(newOperation());
+    await assert.rejects(repo.applyWebhookEvent({ eventId: 'evt_invalid', operationId: operation.id,
+      status: 'approved', payload: {} }), /Missing provider charge ID/);
+    assert.equal((await first.db.select().from(webhookEvents)).length, 0);
+    assert.equal((await repo.findById(operation.id))?.status, 'PROCESSING');
   });
 
   it('(e) concurrent leases return disjoint batches; expired leases can be acquired again', async () => {
@@ -170,7 +232,9 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     assert.equal(new Set([...a, ...b].map((op) => op.id)).size, 20);
     assert.deepEqual(await repo.leasePendingBatch(30000, 60000, 10), []);
     for (const op of [...a, ...b]) {
-      assert.ok(op.reconcileLockedUntil);
+      const [persisted] = await first.db.select().from(operations).where(eq(operations.id, op.id));
+      assert.ok(persisted!.reconcileLockedUntil);
+      assert.equal('reconcileLockedUntil' in op, false);
       assert.equal(op.updatedAt.getTime(), before.find((row) => row.id === op.id)!.updatedAt.getTime());
     }
     const expired = a[0]!;
@@ -178,7 +242,8 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
       .where(eq(operations.id, expired.id));
     const reacquired = await other.leasePendingBatch(30000, 60000, 10);
     assert.deepEqual(reacquired.map((op) => op.id), [expired.id]);
-    assert.ok(reacquired[0]!.reconcileLockedUntil!.getTime() > Date.now());
+    const [persisted] = await first.db.select().from(operations).where(eq(operations.id, expired.id));
+    assert.ok(persisted!.reconcileLockedUntil!.getTime() > Date.now());
     // The reservation transaction has committed: another pool can settle immediately.
     await other.settle(expired.id, approved);
     assert.equal((await repo.findById(expired.id))?.status, 'COMPLETED');

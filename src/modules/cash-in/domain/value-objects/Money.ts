@@ -1,10 +1,12 @@
-import { ValidationError } from '../../../shared/domain/errors/index.ts';
+import { ValidationError } from '../../../../shared/domain/errors/index.ts';
+
+export const CENTS_PER_UNIT = 100;
 
 export const toCents = (amount: unknown): number => {
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) {
     throw new ValidationError('Invalid amount', [{ field: 'amount', message: 'Must be a positive finite number' }]);
   }
-  const scaled = amount * 100;
+  const scaled = amount * CENTS_PER_UNIT;
   const cents = Math.round(scaled);
   // Accept only floating-point representation noise (e.g. 0.1 + 0.2), never a fractional cent.
   const tolerance = Math.min(1e-6, Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4);
@@ -14,4 +16,4 @@ export const toCents = (amount: unknown): number => {
   return cents;
 };
 
-export const fromCents = (cents: number): number => cents / 100;
+export const fromCents = (cents: number): number => cents / CENTS_PER_UNIT;

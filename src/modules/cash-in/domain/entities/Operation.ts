@@ -1,5 +1,8 @@
-import { ValidationError, type FieldError } from '../../../shared/domain/errors/index.ts';
-import type { OperationStatus } from './OperationStatus.ts';
+import { ValidationError, type FieldError } from '../../../../shared/domain/errors/index.ts';
+import { OperationStatus } from '../value-objects/OperationStatus.ts';
+import { Currency, SUPPORTED_CURRENCIES } from '../value-objects/Currency.ts';
+
+export const OPERATION_ID_PREFIX = 'op_';
 
 export interface NewOperation {
   id: string;
@@ -15,7 +18,6 @@ export interface OperationData extends NewOperation {
   status: OperationStatus;
   providerChargeId: string | null;
   failureReason: string | null;
-  reconcileLockedUntil: Date | null;
   createdAt: Date;
   updatedAt: Date;
   newBalanceCents: number | null;
@@ -32,7 +34,6 @@ export class Operation implements Readonly<OperationData> {
   readonly status: OperationStatus;
   readonly providerChargeId: string | null;
   readonly failureReason: string | null;
-  readonly reconcileLockedUntil: Date | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly newBalanceCents: number | null;
@@ -48,7 +49,6 @@ export class Operation implements Readonly<OperationData> {
     this.status = data.status;
     this.providerChargeId = data.providerChargeId;
     this.failureReason = data.failureReason;
-    this.reconcileLockedUntil = data.reconcileLockedUntil;
     this.createdAt = data.createdAt;
     this.updatedAt = data.updatedAt;
     this.newBalanceCents = data.newBalanceCents;
@@ -59,14 +59,16 @@ export class Operation implements Readonly<OperationData> {
     for (const [field, value] of [['user_id', input.userId], ['payment_method', input.paymentMethod]] as const) {
       if (typeof value !== 'string' || value.trim().length === 0) details.push({ field, message: 'Must be a non-empty string' });
     }
-    if (input.currency !== 'PEN') details.push({ field: 'currency', message: 'Must be PEN' });
+    if (!SUPPORTED_CURRENCIES.some((currency) => currency === input.currency)) {
+      details.push({ field: 'currency', message: `Must be ${Currency.PEN}` });
+    }
     if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) {
       details.push({ field: 'amount', message: 'Must be a positive integer number of cents' });
     }
     if (details.length > 0) throw new ValidationError('Invalid cash-in operation', details);
     const now = new Date();
-    return new Operation({ ...input, status: 'PROCESSING', providerChargeId: null, failureReason: null,
-      reconcileLockedUntil: null, createdAt: now, updatedAt: now, newBalanceCents: null });
+    return new Operation({ ...input, status: OperationStatus.PROCESSING, providerChargeId: null, failureReason: null,
+      createdAt: now, updatedAt: now, newBalanceCents: null });
   }
 
   static restore(data: OperationData): Operation { return new Operation(data); }

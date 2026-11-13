@@ -55,7 +55,7 @@
     - (d) 20 `settle` concurrentes de operaciones distintas del mismo usuario dejan el saldo igual a la suma exacta (R6.3);
     - (e) dos `leasePendingBatch` concurrentes nunca devuelven la misma operación, y una operación con la reserva vencida vuelve a poder reservarse (R7.3).
 
-- [ ] **T4.1. Correcciones de la revisión de T1–T4** (hacer antes de T5): R8, R5.3, R5.4, design §2, §2.1, §5, §6.3
+- [x] **T4.1. Correcciones de la revisión de T1–T4** (hacer antes de T5): R8, R5.3, R5.4, design §2, §2.1, §5, §6.3
   > Origen: revisión humana y del agente A sobre T1–T4 (ver `docs/ai-log.md`, Fase 2). Cada punto se corrige **sin cambiar el comportamiento** que ya cubren los tests de T1–T4; los tests existentes deben seguir pasando, adaptando solo los imports y los nombres.
   1. **🔴 Pool sin manejador de errores (R8).** En `createDb`, registrar `pool.on('error', …)` que registre el error con el logger y **no** tumbe el proceso. Test: terminar una conexión inactiva del pool con `pg_terminate_backend` desde otra sesión; el proceso sigue vivo y la siguiente consulta funciona. Antes de este arreglo, esto mataba el proceso con `Unhandled 'error' event` (código `57P01`).
   2. **Estructura de `domain/` (design §2).** Mover a `entities/Operation.ts`, `value-objects/{OperationStatus,Money,Currency,WebhookEventResult}.ts`, `repositories/OperationRepository.ts` y `gateways/PaymentProvider.ts`. Actualizar los imports.
@@ -137,6 +137,10 @@
 ## Dudas del implementador
 
 > El agente que implementa anota aquí lo que encuentre incorrecto o ambiguo en el spec, con la tarea afectada y qué decidió (o si se detuvo).
+
+- **T3 / T4 / T4.1 — Transacción del webhook y frontera del puerto. RESUELTA por la revisión humana.** En T3/T4 se dejó `tx` solo en el adaptador, aunque la descripción anterior de design §6.3 lo requería para orquestar el webhook desde aplicación. La afirmación anterior de "sin desviaciones" fue incorrecta: esta discrepancia debía registrarse aquí. El spec actualizado §5/§6.3 la resuelve con `applyWebhookEvent`: la transacción y su `tx` son internos al adaptador; el puerto solo expone tipos de dominio.
+
+- **T4.1 — Datos auxiliares del webhook.** `PaymentWebhookEvent` no incluye un motivo de rechazo y declara `providerChargeId` opcional. Se usa `DEFAULT_DECLINE_REASON` (`Payment declined`) para el rechazo; para un evento aprobado se exige un identificador no vacío, coherente con `SettleOutcome` y el contrato de R5.1. Si falta, se lanza `ValidationError` y se revierte también el evento. Los duplicados por `eventId` se devuelven antes de esa validación y no se reprocesan. No se inventa un identificador de cobro.
 
 - **T4 / T9 — Reconciliación y llamadas externas dentro de transacciones. ✅ RESUELTA (decisión humana: opción 2, reserva con vencimiento).** El spec se corrigió:
   - R7.3 aclarado;
