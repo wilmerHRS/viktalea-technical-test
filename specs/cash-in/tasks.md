@@ -47,12 +47,13 @@
   - **Acepta cuando**: hay tests unitarios de todas las transiciones válidas e inválidas (R3.2, R3.3) y de `Money` (100.00 ↔ 10000, 0.1 + 0.2, 1.005 rechazado).
 
 - [ ] **T4. Repositorio con Drizzle**: R2.1, R2.5, R3.4, R6.1–R6.3, NFR3
-  - `DrizzleOperationRepository`: `claim`, `findById`, `markUnknown`, `settle(…, tx?)`, `withPendingBatch`, `recordWebhookEvent(…, tx?)` según design §6, escritos con las construcciones de design §6.5. Mapea las filas de Drizzle a la entidad `Operation`: el dominio no importa nada de Drizzle.
+  - `DrizzleOperationRepository`: `claim`, `findById`, `markUnknown`, `settle(…, tx?)`, `leasePendingBatch`, `recordWebhookEvent(…, tx?)` según design §6, escritos con las construcciones de design §6.5. Mapea las filas de Drizzle a la entidad `Operation`: el dominio no importa nada de Drizzle.
   - **Acepta cuando** hay tests de integración que demuestran:
     - (a) dos `claim` concurrentes con la misma key crean una sola fila;
     - (b) dos `settle(COMPLETED)` concurrentes acreditan una sola vez;
     - (c) `settle` sobre una operación final devuelve `applied: false`;
-    - (d) 20 `settle` concurrentes de operaciones distintas del mismo usuario dejan el saldo igual a la suma exacta (R6.3).
+    - (d) 20 `settle` concurrentes de operaciones distintas del mismo usuario dejan el saldo igual a la suma exacta (R6.3);
+    - (e) dos `leasePendingBatch` concurrentes nunca devuelven la misma operación, y una operación con la reserva vencida vuelve a poder reservarse (R7.3).
 
 - [ ] **T5. Pasarela falsa**: R4
   - `FakePaymentProvider` según design §8: idempotente por key, `nextOutcome`, `chargeCount`, `setDelay` y el mapeo de `payment_method` para runtime.
@@ -86,12 +87,13 @@
     - `operation_id` inexistente: 404.
 
 - [ ] **T9. Reconciliador y resiliencia**: R7, R8
-  - `ReconcileOperations.ts` (design §6.4) y `startReconciler.ts` (al arrancar, con intervalo y parada en el shutdown de `main.ts`).
+  - `ReconcileOperations.ts` con las tres fases de design §6.4 (reservar, consultar fuera de cualquier transacción, liquidar) y `startReconciler.ts` (al arrancar, con intervalo y parada en el shutdown de `main.ts`). Añadir `RECONCILE_LEASE_MS` a `env.ts` y a `.env.example`.
   - `errorHandler`: los errores de conexión de `pg` se traducen a 503.
   - **Acepta cuando** hay tests de:
     - `timeout_after_charge` seguido de `execute()`: `COMPLETED`;
     - una operación `PROCESSING` antigua y `not_found`: `FAILED` (simula un reinicio antes de cobrar);
-    - dos `execute()` en paralelo no liquidan dos veces;
+    - dos `execute()` en paralelo no liquidan dos veces y no consultan la misma operación a la pasarela;
+    - durante `getChargeStatus()` no hay ninguna transacción abierta (por ejemplo, un webhook liquida la misma operación mientras la consulta está en curso, sin quedarse bloqueado);
     - una app con un pool apuntando a un puerto cerrado: `POST /cash-in` responde 503.
 
 - [ ] **T10. Documentación**: entregables del README [DOC]
@@ -113,4 +115,14 @@
 
 > El agente que implementa anota aquí lo que encuentre incorrecto o ambiguo en el spec, con la tarea afectada y qué decidió (o si se detuvo).
 
-- _(vacío)_
+- **T4 / T9 — Reconciliación y llamadas externas dentro de transacciones. ✅ RESUELTA (decisión humana: opción 2, reserva con vencimiento).** El spec se corrigió:
+  - R7.3 aclarado;
+  - design §3: columna `reconcile_locked_until`;
+  - design §5: `withPendingBatch` se reemplaza por `leasePendingBatch`;
+  - design §6.4: tres fases (reservar, consultar sin transacción, liquidar);
+  - design §6.5 y §9: `RECONCILE_LEASE_MS`;
+  - T4 (criterio e) y T9.
+
+  La prohibición de llamar a la pasarela dentro de una transacción se mantiene sin excepciones.
+
+  _Duda original:_ design §6.4 exige mantener `FOR UPDATE SKIP LOCKED` y ejecutar `provider.getChargeStatus()` dentro de la misma transacción; design §6.5 y las instrucciones del usuario prohíben llamar a la pasarela dentro de una transacción. `withPendingBatch` de §5 también vincula el callback a esa transacción. Esto afecta a la exclusión entre pods (R7.3). Se detuvo la implementación para consultar si la prohibición admite una excepción solo para consultar el estado (nunca para cobrar), o si se autoriza diseñar un mecanismo de reserva persistente que permita consultar fuera de la transacción. No se ha elegido ni implementado ninguna alternativa.

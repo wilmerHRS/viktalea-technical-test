@@ -36,7 +36,7 @@
 
 | Tarea | Qué hizo el agente | Problema detectado en la revisión | Corrección |
 |---|---|---|---|
-| | | | |
+| Antes de T1 | El agente implementador (B) leyó el spec y **se detuvo antes de escribir código**. | B detectó una contradicción en el spec que escribió el agente A: design §6.4 llamaba a `getChargeStatus()` dentro de la transacción con `FOR UPDATE SKIP LOCKED`, y §6.5 prohíbe llamar a la pasarela dentro de una transacción. Propuso dos opciones: (1) una excepción para consultas o (2) una reserva persistente con vencimiento. | Decisión humana: **opción 2**. La opción 1 mantendría hasta 10 o 50 locks y una conexión durante llamadas externas (minutos), y bloquearía los webhooks. Clave del razonamiento: la exclusión del reconciliador solo evita trabajo duplicado, porque la exactitud ya la da el `settle()` condicional; basta con un lease (`reconcile_locked_until`) reservado en una transacción corta. Se corrigieron R7.3, design §3, §5, §6.4, §6.5 y §9, y T4 y T9. |
 
 ## Riesgos típicos de un agente que se vigilan en la revisión
 

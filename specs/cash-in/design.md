@@ -12,7 +12,7 @@ Cliente ──POST /cash-in──▶ API (N pods) ──charge(op_id)──▶ P
                               ▼
                         PostgreSQL  (operations · wallets · ledger_entries · webhook_events)
                               ▲
-              Reconciler (en cada pod, con SKIP LOCKED) ──getChargeStatus(op_id)──▶ Pasarela
+              Reconciler (en cada pod, reserva con lease) ──getChargeStatus(op_id)──▶ Pasarela
 ```
 
 Las tres vías que pueden finalizar una operación (respuesta de la pasarela, webhook y reconciliador) llaman a **la misma función `settle()`**. Por eso es imposible acreditar dos veces.
@@ -89,6 +89,7 @@ CREATE TABLE operations (
   status              TEXT        NOT NULL CHECK (status IN ('PROCESSING','UNKNOWN','COMPLETED','FAILED')),
   provider_charge_id  TEXT,
   failure_reason      TEXT,
+  reconcile_locked_until TIMESTAMPTZ,                      -- R7.3: reserva (lease) del reconciliador, §6.4
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -154,8 +155,12 @@ export interface OperationRepository {
   findById(id: string): Promise<Operation | null>;
   markUnknown(id: string): Promise<void>;                      // PROCESSING → UNKNOWN (condicional)
   settle(id: string, outcome: SettleOutcome): Promise<{ applied: boolean; operation: Operation }>;
-  /** Para el reconciliador: FOR UPDATE SKIP LOCKED dentro de la transacción que recibe fn. */
-  withPendingBatch(olderThanMs: number, limit: number, fn: (ops: Operation[]) => Promise<void>): Promise<void>;
+  /**
+   * Para el reconciliador (§6.4): reserva hasta `limit` operaciones pendientes y sin reserva vigente,
+   * marcando reconcile_locked_until = now() + leaseMs, en UNA transacción corta que se confirma antes de devolver.
+   * El llamador consulta la pasarela FUERA de cualquier transacción.
+   */
+  leasePendingBatch(olderThanMs: number, leaseMs: number, limit: number): Promise<Operation[]>;
   recordWebhookEvent(e: WebhookEventInput): Promise<{ duplicate: boolean }>;
 }
 export type SettleOutcome =
@@ -234,19 +239,34 @@ Por eso `settle` y `recordWebhookEvent` aceptan un cliente de transacción opcio
 
 ### 6.4 Reconciliador (R7)
 
+Se hace en tres fases. **Ninguna llamada a la pasarela ocurre con una transacción abierta** (§6.5).
+
 ```
 cada RECONCILE_INTERVAL_MS (y una vez al arrancar):
-  BEGIN
-  SELECT * FROM operations
-   WHERE status = 'UNKNOWN' OR (status = 'PROCESSING' AND updated_at < now() - $olderThan)
-   ORDER BY updated_at LIMIT 50
-   FOR UPDATE SKIP LOCKED;                              -- R7.3: cada pod toma filas distintas
-  para cada op: s = provider.getChargeStatus(op.id)
+
+1. RESERVAR: repo.leasePendingBatch(RECONCILE_AFTER_MS, RECONCILE_LEASE_MS, 10)
+   transacción corta, se confirma de inmediato:
+     UPDATE operations SET reconcile_locked_until = now() + $lease
+      WHERE id IN (
+        SELECT id FROM operations
+         WHERE (status = 'UNKNOWN' OR (status = 'PROCESSING' AND updated_at < now() - $olderThan))
+           AND (reconcile_locked_until IS NULL OR reconcile_locked_until < now())
+         ORDER BY updated_at
+         LIMIT $batch
+         FOR UPDATE SKIP LOCKED)                          -- cada pod reserva filas distintas
+     RETURNING *;
+
+2. CONSULTAR (sin transacción): para cada op, s = provider.getChargeStatus(op.id)
+
+3. LIQUIDAR (una transacción corta por operación, la de settle):
      approved → settle(COMPLETED) · declined / not_found → settle(FAILED) · pending / error → nada
-  COMMIT
 ```
 
-- `settle` se ejecuta con el mismo `tx` que tiene el lock.
+Reglas:
+- **Qué garantiza cada pieza.** La exactitud (no acreditar dos veces) la da `settle()`, que es condicional. La reserva solo evita trabajo duplicado entre pods (R7.3). Si una reserva vence durante una consulta lenta y otro pod consulta la misma operación, el único coste es una consulta repetida.
+- **Caída de un pod.** La reserva vence (`reconcile_locked_until < now()`) y otro pod retoma la operación en el siguiente ciclo. No hace falta liberarla de forma explícita: `settle` deja la operación en un estado final y ya no vuelve a seleccionarse.
+- **La reserva no toca `updated_at`**, porque `updated_at` mide la antigüedad de una operación en `PROCESSING`.
+- **Tamaño de la reserva:** `RECONCILE_LEASE_MS ≥ batch × PROVIDER_TIMEOUT_MS`. Con un lote de 10 y 5 s por consulta da 50 s, y el valor por defecto es 60 s. Las consultas del lote se hacen secuencialmente.
 - El job debe ser cancelable en el shutdown (`clearInterval`).
 - En los tests se invoca `ReconcileOperations.execute()` directamente, sin timers.
 
@@ -261,7 +281,7 @@ Se usa el query builder por defecto. Si una consulta queda más clara o más cor
 | Transición condicionada (R3.4) | `tx.update(operations).set({ status, … }).where(and(eq(operations.id, id), inArray(operations.status, ['PROCESSING','UNKNOWN']))).returning()` |
 | Incremento atómico del saldo (R6.3) | `` tx.update(wallets).set({ balanceCents: sql`${wallets.balanceCents} + ${amount}` }).where(eq(wallets.userId, userId)).returning() `` |
 | Deduplicar el webhook (R5.3) | `tx.insert(webhookEvents).values(e).onConflictDoNothing({ target: webhookEvents.eventId }).returning()` |
-| Lote del reconciliador (R7.3) | `tx.select().from(operations).where(…).orderBy(operations.updatedAt).limit(50).for('update', { skipLocked: true })` |
+| Reserva del lote del reconciliador (R7.3) | `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING *` de §6.4. Es un buen candidato para SQL crudo (`` db.execute(sql`…`) ``); con el builder, la subconsulta usa `.for('update', { skipLocked: true })`. |
 | Transacción (R6.1) | `db.transaction(async (tx) => { … })`. Los métodos del repositorio aceptan `tx?: Tx` y usan `tx ?? db`. |
 
 **Prohibido** en idempotencia, transiciones y saldo, se use el builder o SQL crudo:
@@ -308,6 +328,7 @@ Es un adaptador en memoria que simula al sistema **externo**. La idempotencia de
 | `PROVIDER_TIMEOUT_MS` | entero > 0 | 5000 |
 | `RECONCILE_INTERVAL_MS` | entero > 0 | 30000 |
 | `RECONCILE_AFTER_MS` | entero > 0 | 30000 |
+| `RECONCILE_LEASE_MS` | entero > 0 (≥ 10 × `PROVIDER_TIMEOUT_MS`, §6.4) | 60000 |
 | `LOG_LEVEL` | `fatal`, `error`, `warn`, `info`, `debug` o `trace` | `info` |
 
 `docker-compose.yml` levanta `postgres:17-alpine` con las credenciales escritas en el archivo, y crea las bases `cashin` y `cashin_test`. `.env.test` (versionado, solo con valores locales) repite la configuración de `.env` con `DB_NAME=cashin_test`. `client.ts` construye el `Pool` de `pg` con `{ host, port, user, password, database }` a partir de esas variables.

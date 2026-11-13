@@ -102,7 +102,7 @@ Pregunta central que la solución debe responder [DOC]:
   - `declined`: pasa a `FAILED`.
   - `not_found`: pasa a `FAILED`, porque el cobro nunca llegó a la pasarela.
   - `pending` o error: la operación se deja como está para el siguiente ciclo.
-- **R7.3** Varios pods ejecutando la reconciliación a la vez NO DEBEN procesar la misma operación al mismo tiempo.
+- **R7.3** Varios pods ejecutando la reconciliación a la vez NO DEBEN consultar la misma operación al mismo tiempo mientras su reserva esté vigente. Si un pod se cae, sus reservas vencen y otro pod retoma las operaciones. Esta exclusión evita trabajo duplicado; la exactitud (no acreditar dos veces) la garantiza la liquidación condicional (R3.4).
 
 ### R8. Resiliencia [DOC: "fallo temporal de DB", "reinicio del servicio"]
 
