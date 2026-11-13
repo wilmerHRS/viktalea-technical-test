@@ -1,0 +1,20 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1794590017950,
+      "tag": "0000_medical_shaman",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794592868826,
+      "tag": "0001_webhook_result_set_in_transaction",
+      "breakpoints": true
+    }
+  ]
+}
