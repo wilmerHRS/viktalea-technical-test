@@ -1,17 +1,11 @@
 import { NotFoundError } from '../../../../shared/domain/errors/app.errors.ts';
-import type { Operation } from '../../domain/entities/operation.entity.ts';
 import { OperationStatus } from '../../domain/value-objects/operation-status.value-object.ts';
 import {
   toStatusChange,
   type SettleOutcome,
 } from '../../domain/value-objects/settle-outcome.value-object.ts';
+import type { SettleResult } from '../dtos/output/settle-result.dto.ts';
 import type { CashInRepositories } from '../ports/unit-of-work.port.ts';
-
-export interface SettleResult {
-  /** false si otra vía (respuesta de la API, webhook o reconciliador) ya la había finalizado. */
-  applied: boolean;
-  operation: Operation;
-}
 
 /**
  * Lleva una operación a su estado final y, si se completó, acredita la wallet (R3, R6).

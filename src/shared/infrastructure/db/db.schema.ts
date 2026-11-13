@@ -3,4 +3,4 @@ export {
   operations,
   ledgerEntries,
   webhookEvents,
-} from '../../../modules/cash-in/infrastructure/persistence/cash-in.tables.ts';
+} from '../../../modules/cash-in/infrastructure/persistence/tables/cash-in.tables.ts';

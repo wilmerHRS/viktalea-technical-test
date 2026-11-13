@@ -1,6 +1,7 @@
 import type { SettleOutcome } from '../../domain/value-objects/settle-outcome.value-object.ts';
 import type { UnitOfWork } from '../ports/unit-of-work.port.ts';
-import { settleOperation, type SettleResult } from '../services/settle-operation.service.ts';
+import type { SettleResult } from '../dtos/output/settle-result.dto.ts';
+import { settleOperation } from '../services/settle-operation.service.ts';
 
 interface SettleOperationDependencies {
   unitOfWork: UnitOfWork;

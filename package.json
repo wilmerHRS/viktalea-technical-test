@@ -19,8 +19,8 @@
     "db:logs": "docker compose logs -f postgres",
     "db:psql": "docker compose exec postgres sh -c \"psql -U $POSTGRES_USER -d $POSTGRES_DB\"",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx --env-file=.env src/shared/infrastructure/db/migrate.script.ts",
-    "db:migrate:test": "tsx --env-file=.env.test src/shared/infrastructure/db/migrate.script.ts",
+    "db:migrate": "tsx --env-file=.env src/shared/infrastructure/db/scripts/migrate.script.ts",
+    "db:migrate:test": "tsx --env-file=.env.test src/shared/infrastructure/db/scripts/migrate.script.ts",
     "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\"",
     "lint": "eslint src tests"

@@ -1,9 +1,9 @@
 import type { ErrorRequestHandler } from 'express';
 import { AppError, ErrorCode } from '../../../domain/errors/app.errors.ts';
-import { isDatabaseUnavailableError } from '../../db/database-unavailable.util.ts';
-import { errorStatusMap, HttpErrorCode } from '../error-status.map.ts';
-import { HttpStatus } from '../http-status.constants.ts';
-import { isJsonParseError } from '../json-parse-error.util.ts';
+import { isDatabaseUnavailableError } from '../../db/utils/database-unavailable.util.ts';
+import { errorStatusMap, HttpErrorCode } from '../constants/error-status.constants.ts';
+import { HttpStatus } from '../constants/http-status.constants.ts';
+import { isJsonParseError } from '../utils/json-parse-error.util.ts';
 
 const MALFORMED_JSON_MESSAGE = 'Malformed JSON body';
 const SERVICE_UNAVAILABLE_MESSAGE = 'Service temporarily unavailable, retry with the same key';

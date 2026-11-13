@@ -54,35 +54,54 @@ El código se organiza **por módulo de negocio** (feature) y, dentro de cada m�
 
 ```
 src/
-├── main.ts                    # Entry point: crea los módulos, se los pasa a createApp() y levanta el servidor
-├── app.ts                     # createApp(modules): middlewares globales + monta los módulos recibidos en /api/v1
-├── config/
-│   └── env.ts                 # Única fuente de configuración (process.env), tipada
+├── main.ts                    # Entry point: crea los módulos y los jobs, se los pasa a createApp() y levanta el servidor
+├── app.ts                     # createApp(modules): middlewares globales + monta los módulos recibidos
+├── config/env.config.ts       # Única fuente de configuración (process.env), tipada y validada
 ├── shared/                    # Código transversal, sin lógica de negocio de un módulo
-│   ├── domain/
-│   │   └── errors/            # AppError, ValidationError, NotFoundError, ConflictError, FieldError
+│   ├── domain/errors/         # AppError y subclases (con `code`, sin HTTP)
+│   ├── utils/                 # Helpers genéricos (*.util.ts)
 │   └── infrastructure/
-│       └── http/
-│           ├── http-module.interface.ts  # Interface { basePath, router } que expone cada módulo
-│           └── middlewares/   # errorHandler, notFound
+│       ├── db/                # cliente, esquema global, scripts/ y utils/
+│       ├── logging/
+│       └── http/              # constants/, errors/, interfaces/, middlewares/, utils/
 └── modules/
-    └── <module>/              # p. ej. users/
+    └── <module>/              # p. ej. cash-in/
         ├── <module>.module.ts # Composition root del módulo (inyección de dependencias manual)
-        ├── domain/            # Núcleo: SOLO conceptos de negocio (sin HTTP, SQL, ORM ni detalles de infraestructura)
+        ├── domain/            # SOLO conceptos de negocio (sin HTTP, SQL, ORM ni infraestructura)
         │   ├── entities/      # Entidades con invariantes y factorías (Entity.create / Entity.restore)
         │   ├── value-objects/ # Valores y reglas puras: "enums" as const, máquina de estados, Money…
-        │   ├── repositories/  # Puertos de persistencia (interfaces TS) que la infraestructura implementa
-        │   └── gateways/      # Puertos hacia sistemas externos (p. ej. la pasarela de pagos)
+        │   ├── repositories/  # Puertos de persistencia (interfaces) que la infraestructura implementa
+        │   ├── gateways/      # Puertos hacia sistemas externos (p. ej. la pasarela de pagos)
+        │   └── errors/        # Errores del dominio o de sus gateways
         ├── application/       # TODA la lógica de orquestación: se lee paso a paso
-        │   ├── ports/         # Puertos de la aplicación (p. ej. UnitOfWork: varias escrituras en una transacción)
-        │   ├── services/      # Pasos reutilizados por varios casos de uso (p. ej. settleOperation)
         │   ├── use-cases/     # Una clase por caso de uso con método execute()
-        │   └── dtos/          # Tipos de entrada/salida + mapeo entidad → DTO
+        │   ├── services/      # Pasos reutilizados por varios casos de uso
+        │   ├── ports/         # Puertos de la aplicación (p. ej. UnitOfWork)
+        │   ├── dtos/
+        │   │   ├── input/     # Lo que reciben los casos de uso
+        │   │   └── output/    # Lo que devuelven los casos de uso
+        │   ├── mappers/       # Entidad → DTO de salida
+        │   └── constants/
         └── infrastructure/    # Adaptadores: detalles técnicos intercambiables
-            ├── persistence/   # Implementaciones de los repositorios (InMemory, Postgres, …)
-            └── http/          # Controller + router de Express
+            ├── http/
+            │   ├── routes/      # Rutas de Express
+            │   ├── controllers/ # Delgados: leen el request, llaman al caso de uso, responden
+            │   ├── request/     # Validadores de la entrada (zod): *-request.validator.ts
+            │   ├── response/    # Traducción resultado → respuesta HTTP: *-response.presenter.ts
+            │   └── utils/
+            ├── persistence/
+            │   ├── tables/        # Tablas de Drizzle
+            │   ├── repositories/  # Implementaciones de los puertos de persistencia
+            │   ├── unit-of-work/  # Implementación del puerto UnitOfWork
+            │   └── mappers/       # Fila → entidad
+            ├── providers/     # Implementaciones de los gateways (p. ej. la pasarela simulada)
+            └── jobs/          # Tareas periódicas
 tests/
-└── modules/<module>/          # Tests unitarios (casos de uso) e integración HTTP (supertest)
+├── fixtures/                  # Datos y entornos de prueba (*.fixture.ts)
+└── modules/<module>/
+    ├── unit/                  # Sin base de datos
+    ├── integration/           # Casos de uso y repositorios contra PostgreSQL real
+    └── http/                  # Las APIs de punta a punta (supertest)
 dist/                          # Salida de `npm run build` (ignorada por git)
 ```
 
@@ -102,6 +121,7 @@ infrastructure  →  application  →  domain
 
 ### Convenciones
 
+- **Carpetas**: **una carpeta por tipo de archivo** dentro de cada capa (`controllers/`, `routes/`, `request/`, `response/`, `repositories/`, `mappers/`, `dtos/input/`, `dtos/output/`, `utils/`…), siguiendo el árbol de arriba. Nunca se mezclan tipos en una carpeta. Los tipos de entrada y salida de un caso de uso no se declaran dentro del caso de uso: van en `dtos/input/` y `dtos/output/`.
 - **Nombres de archivo**: `kebab-case` + **sufijo que dice qué es**: `<nombre>.<tipo>.ts`. La clase o función de dentro va en PascalCase o camelCase (`create-cash-in.use-case.ts` → `class CreateCashIn`).
 
   | Sufijo | Qué contiene | Ejemplo |
@@ -138,7 +158,7 @@ infrastructure  →  application  →  domain
   - Nunca se llama a un sistema externo dentro de `run`.
 - **Casos de uso**: una clase por caso, constructor con objeto de dependencias tipado `{ userRepository, ... }` (campos `private readonly`), único método público `async execute(input): Promise<Dto>`. Devuelven DTOs, nunca entidades.
 - **Entidades**: constructor `private`; `static create(...)` valida invariantes y lanza `ValidationError` con `details: FieldError[]`; `static restore(...)` rehidrata desde persistencia sin validar. Propiedades `readonly`.
-- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/error-status.map.ts`. No construir respuestas de error a mano en los controllers.
+- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/error-status.constants.ts`. No construir respuestas de error a mano en los controllers.
 - **Constantes y "enums"**: ningún literal de negocio repetido (estados, monedas, resultados, prefijos, tamaños de lote, códigos HTTP, tiempos). Se define una vez como constante con nombre, **junto al concepto que describe** (no en un `constants.ts` global), y se importa. Para conjuntos cerrados se usa un objeto `as const` más un tipo derivado, no `enum` de TypeScript:
   ```ts
   export const Currency = { PEN: 'PEN' } as const;

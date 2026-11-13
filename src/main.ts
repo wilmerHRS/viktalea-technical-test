@@ -2,7 +2,7 @@ import { createApp } from './app.ts';
 import { env } from './config/env.config.ts';
 import { createCashInModule, createCashInReconciler } from './modules/cash-in/cash-in.module.ts';
 import { startReconcilerJob } from './modules/cash-in/infrastructure/jobs/reconciler.job.ts';
-import { FakePaymentProvider } from './modules/cash-in/infrastructure/provider/fake-payment.provider.ts';
+import { FakePaymentProvider } from './modules/cash-in/infrastructure/providers/fake-payment.provider.ts';
 import { createDb } from './shared/infrastructure/db/db.client.ts';
 import { logger } from './shared/infrastructure/logging/logger.config.ts';
 

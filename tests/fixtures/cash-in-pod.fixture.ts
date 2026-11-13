@@ -11,7 +11,7 @@ import { ClaimOperation } from '../../src/modules/cash-in/application/use-cases/
 import { SettleOperation } from '../../src/modules/cash-in/application/use-cases/settle-operation.use-case.ts';
 import { MarkOperationUnknown } from '../../src/modules/cash-in/application/use-cases/mark-operation-unknown.use-case.ts';
 import { HandlePaymentWebhook } from '../../src/modules/cash-in/application/use-cases/handle-payment-webhook.use-case.ts';
-import { DrizzleUnitOfWork } from '../../src/modules/cash-in/infrastructure/persistence/drizzle-unit-of-work.ts';
+import { DrizzleUnitOfWork } from '../../src/modules/cash-in/infrastructure/persistence/unit-of-work/drizzle-unit-of-work.ts';
 
 /**
  * A "pod": its own connection pool plus the use cases wired to it. Two pods on the same

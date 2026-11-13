@@ -21,82 +21,68 @@ Las tres vías que pueden finalizar una operación (respuesta de la pasarela, we
 
 ```
 src/
-├── main.ts                                   # crea db, pasarela y módulos; arranca el server (y el reconciliador, T9)
+├── main.ts                                   # crea db, pasarela, módulos y el job del reconciliador
 ├── app.ts                                    # createApp(modules): middlewares globales, sin prefijo /api/v1 (R1.1)
 ├── config/env.config.ts                      # variables de entorno validadas con zod (design §9)
 ├── shared/
 │   ├── domain/errors/app.errors.ts           # AppError + subclases con `code` (sin HTTP)
-│   ├── utils/with-timeout.util.ts            # timeout genérico para promesas
+│   ├── utils/with-timeout.util.ts
 │   └── infrastructure/
 │       ├── db/
 │       │   ├── db.client.ts                  # createDb(config) → { db, pool } + tipos Db / Tx / DbExecutor
-│       │   ├── db.schema.ts                  # reexporta las tablas de todos los módulos (cliente y drizzle-kit)
-│       │   ├── migrate.script.ts             # aplica /drizzle (npm run db:migrate)
-│       │   ├── sql-time.util.ts              # NOW, millisecondsAgo(), millisecondsFromNow()
-│       │   ├── sql-in-list.util.ts           # listas de constantes para CHECK / índices
-│       │   └── database-unavailable.util.ts  # ¿el error significa "BD caída"? (→ 503)
+│       │   ├── db.schema.ts                  # reexporta las tablas de todos los módulos
+│       │   ├── scripts/migrate.script.ts     # npm run db:migrate
+│       │   └── utils/                        # sql-time, sql-in-list, database-unavailable (→ 503)
 │       ├── logging/logger.config.ts          # pino
 │       └── http/
-│           ├── http-module.interface.ts      # { basePath, router } que expone cada módulo
-│           ├── http-status.constants.ts      # HttpStatus
-│           ├── error-status.map.ts           # código de error → HttpStatus
-│           ├── http.errors.ts                # errores propios de HTTP (firma inválida)
-│           ├── raw-body.util.ts              # guarda el body crudo (firma HMAC del webhook)
-│           ├── zod-validation.util.ts        # error de zod → ValidationError con details
-│           ├── json-parse-error.util.ts
-│           └── middlewares/
-│               ├── request-id.middleware.ts  # X-Request-Id (R9.1)
-│               ├── error-handler.middleware.ts # errores → { error: { code, message } }; BD caída → 503
-│               └── not-found.middleware.ts
+│           ├── constants/                    # http-status.constants, error-status.constants (código → HTTP)
+│           ├── errors/http.errors.ts         # errores propios de HTTP (firma inválida)
+│           ├── interfaces/http-module.interface.ts
+│           ├── middlewares/                  # request-id, error-handler, not-found
+│           └── utils/                        # raw-body, zod-validation, json-parse-error
 └── modules/cash-in/
-    ├── cash-in.module.ts                     # composition root: crea adaptadores, casos de uso y controllers
+    ├── cash-in.module.ts                     # composition root: adaptadores, casos de uso, controllers
     ├── domain/                               # SOLO conceptos de negocio: sin HTTP, SQL ni Drizzle
     │   ├── entities/operation.entity.ts
-    │   ├── value-objects/
-    │   │   ├── operation-status.value-object.ts      # "enum" + transiciones + SETTLEABLE/FINAL_STATUSES
-    │   │   ├── money.value-object.ts                 # CENTS_PER_UNIT, toCents(), fromCents()
-    │   │   ├── currency.value-object.ts
-    │   │   ├── settle-outcome.value-object.ts        # COMPLETED + chargeId | FAILED + motivo; toStatusChange()
-    │   │   ├── payment-webhook-event.value-object.ts # evento validado + toSettleOutcome()
-    │   │   └── webhook-event-result.value-object.ts  # applied / ignored / conflict + classifyWebhookResult()
-    │   ├── repositories/                     # puertos de persistencia: una sentencia atómica por método
-    │   │   ├── operation.repository.ts
-    │   │   ├── wallet.repository.ts
-    │   │   ├── ledger.repository.ts
-    │   │   └── webhook-event.repository.ts
-    │   └── gateways/
-    │       ├── payment-provider.gateway.ts   # puerto hacia la pasarela + ChargeOutcome / ProviderChargeStatus
-    │       └── payment-provider.errors.ts    # ProviderTimeoutError, ProviderUnavailableError
-    ├── application/                          # AQUÍ está la lógica: cada caso de uso se lee paso a paso
+    │   ├── value-objects/                    # operation-status, money, currency, settle-outcome,
+    │   │                                     # payment-webhook-event, webhook-event-result
+    │   ├── repositories/                     # puertos de persistencia: operation, wallet, ledger, webhook-event
+    │   ├── gateways/payment-provider.gateway.ts # puerto hacia la pasarela
+    │   └── errors/payment-provider.errors.ts # ProviderTimeoutError, ProviderUnavailableError
+    ├── application/                          # TODA la lógica, legible paso a paso
+    │   ├── use-cases/                        # create-cash-in, claim-operation, settle-operation,
+    │   │                                     # mark-operation-unknown, handle-payment-webhook, reconcile-operations
+    │   ├── services/                         # settle-operation (única vía de liquidación), request-hash
     │   ├── ports/unit-of-work.port.ts        # varios repositorios en UNA transacción (§5.1)
-    │   ├── services/
-    │   │   ├── settle-operation.service.ts   # liquidar: estado → acreditar → ledger (única vía, §6.2)
-    │   │   └── request-hash.service.ts       # sha256 del payload (R2.4)
-    │   ├── dtos/cash-in-result.dto.ts        # resultado de un cash-in para el cliente
-    │   └── use-cases/
-    │       ├── create-cash-in.use-case.ts         # POST /cash-in (R1, R2, R4)
-    │       ├── claim-operation.use-case.ts        # registrar la operación de una key (R2)
-    │       ├── settle-operation.use-case.ts       # liquidar en su propia transacción
-    │       ├── mark-operation-unknown.use-case.ts # PROCESSING → UNKNOWN tras un timeout (R4.4)
-    │       ├── handle-payment-webhook.use-case.ts # deduplicar + liquidar + clasificar (R5)
-    │       └── reconcile-operations.use-case.ts   # resolver UNKNOWN / PROCESSING atascadas (R7, T9)
+    │   ├── dtos/
+    │   │   ├── input/                        # create-cash-in, reconcile-settings
+    │   │   └── output/                       # cash-in-result, claim-result, settle-result,
+    │   │                                     # payment-webhook-result, reconcile-summary
+    │   ├── mappers/cash-in-result.mapper.ts  # entidad → resultado para el cliente
+    │   └── constants/reconcile.constants.ts
     └── infrastructure/
+        ├── http/
+        │   ├── routes/cash-in.routes.ts      # POST /cash-in, POST /webhooks/payment
+        │   ├── controllers/                  # cash-in, payment-webhook
+        │   ├── request/                      # validadores zod: cash-in-request, payment-webhook-request
+        │   ├── response/cash-in-response.presenter.ts # resultado → HTTP (200 / 202 / 402, design §7)
+        │   └── utils/webhook-signature.util.ts # HMAC-SHA256 con timingSafeEqual
         ├── persistence/
-        │   ├── cash-in.tables.ts             # tablas Drizzle: wallets, operations, ledger_entries, webhook_events
-        │   ├── drizzle-{operation,wallet,ledger,webhook-event}.repository.ts
-        │   ├── drizzle-unit-of-work.ts       # db.transaction + repositorios sobre ese tx
-        │   └── operation.mapper.ts           # fila → entidad
-        ├── provider/fake-payment.provider.ts # pasarela simulada (design §8)
-        ├── jobs/reconciler.job.ts            # intervalo + ejecución al arrancar (T9)
-        └── http/
-            ├── cash-in.routes.ts             # POST /cash-in, POST /webhooks/payment
-            ├── cash-in.controller.ts
-            ├── payment-webhook.controller.ts
-            ├── cash-in.validation.ts         # esquemas zod del header y los bodies
-            ├── cash-in.presenter.ts          # resultado → HTTP (200 / 202 / 402, design §7)
-            └── webhook-signature.util.ts     # HMAC-SHA256 con timingSafeEqual
+        │   ├── tables/cash-in.tables.ts      # tablas Drizzle
+        │   ├── repositories/                 # drizzle-{operation,wallet,ledger,webhook-event}.repository
+        │   ├── unit-of-work/drizzle-unit-of-work.ts
+        │   └── mappers/operation.mapper.ts   # fila → entidad
+        ├── providers/fake-payment.provider.ts # pasarela simulada (design §8)
+        └── jobs/reconciler.job.ts            # al arrancar + cada RECONCILE_INTERVAL_MS
+tests/
+├── fixtures/                                 # cash-in-pod (un "pod" = pool + casos de uso), pool-recovery
+├── config/ y shared/                         # env, errores, http, BD, recuperación del pool
+└── modules/cash-in/
+    ├── unit/                                 # dominio, webhook-outcome, job del reconciliador (sin BD)
+    ├── integration/                          # casos de uso y reconciliador contra PostgreSQL, 2 pods
+    └── http/                                 # las APIs de punta a punta (incluye 3 pods y BD caída)
 drizzle/                                      # migraciones SQL generadas por drizzle-kit (versionadas)
-drizzle.config.ts                             # drizzle-kit: solo para `generate`
+drizzle.config.ts
 ```
 
 Decisiones:
@@ -117,7 +103,7 @@ Decisiones:
    Motivos: es JavaScript puro (compatible con el *type stripping* nativo de Node y con `erasableSyntaxOnly`, que no admiten `enum`), no tiene las rarezas de `enum` (mapeo inverso en los numéricos, tipado nominal), sus valores son strings legibles en la BD y en los logs, y permite derivar listas (`Object.values`) para los `CHECK` y las validaciones.
 3. **Sin un archivo global de constantes.** Cada constante vive junto al concepto al que pertenece: las de dominio en `domain/value-objects`, las de un puerto en su puerto, las de HTTP en `shared/infrastructure/http/http-status.constants.ts` y las de configuración en `env.config.ts`. Un `constants.ts` global acopla módulos que no tienen relación y termina siendo un cajón de sastre.
 4. **Las reglas derivadas salen de su fuente.** La lista de estados liquidables (`SETTLEABLE_STATUSES = ['PROCESSING','UNKNOWN']`) se deriva de la tabla de transiciones de `OperationStatus`, y el repositorio la usa en su `WHERE status IN (…)`. Así la máquina de estados del dominio y el SQL no pueden divergir.
-5. **Los errores de dominio no conocen HTTP.** `AppError` y sus subclases llevan un `code` (`VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, …) pero **no** un `statusCode`. La traducción a HTTP la hace `shared/infrastructure/http/error-status.map.ts` en el `errorHandler`.
+5. **Los errores de dominio no conocen HTTP.** `AppError` y sus subclases llevan un `code` (`VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, …) pero **no** un `statusCode`. La traducción a HTTP la hace `shared/infrastructure/http/error-status.constants.ts` en el `errorHandler`.
 
 ### 2.2 Legibilidad y formato [decisión humana, revisión de T4.1]
 

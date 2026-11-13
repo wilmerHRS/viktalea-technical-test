@@ -7,26 +7,19 @@ import {
   type ChargeResult,
   type PaymentProvider,
 } from '../../domain/gateways/payment-provider.gateway.ts';
-import { ProviderTimeoutError } from '../../domain/gateways/payment-provider.errors.ts';
+import { ProviderTimeoutError } from '../../domain/errors/payment-provider.errors.ts';
 import type { Currency } from '../../domain/value-objects/currency.value-object.ts';
 import { toCents } from '../../domain/value-objects/money.value-object.ts';
 import { OperationStatus } from '../../domain/value-objects/operation-status.value-object.ts';
 import type { SettleOutcome } from '../../domain/value-objects/settle-outcome.value-object.ts';
-import { toCashInResult, type CashInResult } from '../dtos/cash-in-result.dto.ts';
+import type { CreateCashInInput } from '../dtos/input/create-cash-in.dto.ts';
+import type { CashInResult } from '../dtos/output/cash-in-result.dto.ts';
+import { toCashInResult } from '../mappers/cash-in-result.mapper.ts';
 import type { UnitOfWork } from '../ports/unit-of-work.port.ts';
 import { hashCashInRequest } from '../services/request-hash.service.ts';
 import type { ClaimOperation } from './claim-operation.use-case.ts';
 import type { MarkOperationUnknown } from './mark-operation-unknown.use-case.ts';
 import type { SettleOperation } from './settle-operation.use-case.ts';
-
-/** Datos de entrada ya validados por la capa HTTP. */
-export interface CreateCashInInput {
-  idempotencyKey: string;
-  userId: string;
-  amount: number;
-  currency: Currency;
-  paymentMethod: string;
-}
 
 interface CreateCashInDependencies {
   unitOfWork: UnitOfWork;

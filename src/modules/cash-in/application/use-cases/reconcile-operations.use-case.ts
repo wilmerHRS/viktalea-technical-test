@@ -7,35 +7,14 @@ import {
   type ChargeStatusResult,
   type PaymentProvider,
 } from '../../domain/gateways/payment-provider.gateway.ts';
-import { ProviderTimeoutError } from '../../domain/gateways/payment-provider.errors.ts';
+import { ProviderTimeoutError } from '../../domain/errors/payment-provider.errors.ts';
 import { OperationStatus } from '../../domain/value-objects/operation-status.value-object.ts';
 import type { SettleOutcome } from '../../domain/value-objects/settle-outcome.value-object.ts';
+import { CHARGE_NOT_FOUND_REASON, RECONCILE_BATCH_SIZE } from '../constants/reconcile.constants.ts';
+import type { ReconcileSettings } from '../dtos/input/reconcile-settings.dto.ts';
+import type { ReconcileSummary } from '../dtos/output/reconcile-summary.dto.ts';
 import type { UnitOfWork } from '../ports/unit-of-work.port.ts';
 import type { SettleOperation } from './settle-operation.use-case.ts';
-
-/** Operaciones que se reservan en cada ciclo; con el lease cubre lote × timeout (design §6.4). */
-export const RECONCILE_BATCH_SIZE = 10;
-
-/** Motivo con el que falla una operación que la pasarela nunca llegó a recibir. */
-export const CHARGE_NOT_FOUND_REASON = 'Charge not found at payment provider';
-
-export interface ReconcileSettings {
-  /** Antigüedad a partir de la cual una operación en PROCESSING se considera atascada. */
-  staleAfterMs: number;
-  /** Duración de la reserva de cada operación. */
-  leaseMs: number;
-  /** Tiempo máximo de espera por cada consulta a la pasarela. */
-  providerTimeoutMs: number;
-}
-
-/** Qué pasó en un ciclo de reconciliación (para logs y tests). */
-export interface ReconcileSummary {
-  reserved: number;
-  completed: number;
-  failed: number;
-  stillPending: number;
-  errors: number;
-}
 
 interface ReconcileOperationsDependencies {
   unitOfWork: UnitOfWork;

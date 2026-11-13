@@ -1,11 +1,6 @@
-import type { NewOperation, Operation } from '../../domain/entities/operation.entity.ts';
+import type { NewOperation } from '../../domain/entities/operation.entity.ts';
+import type { ClaimResult } from '../dtos/output/claim-result.dto.ts';
 import type { UnitOfWork } from '../ports/unit-of-work.port.ts';
-
-export interface ClaimResult {
-  /** true para la primera request con esta idempotency key; false para cualquier repetición. */
-  created: boolean;
-  operation: Operation;
-}
 
 interface ClaimOperationDependencies {
   unitOfWork: UnitOfWork;

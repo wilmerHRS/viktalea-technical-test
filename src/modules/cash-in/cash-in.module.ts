@@ -1,7 +1,7 @@
 // Composition root del módulo cash-in: crea los adaptadores, los casos de uso y los controllers.
 import type { Logger } from 'pino';
 import type { Db } from '../../shared/infrastructure/db/db.client.ts';
-import type { HttpModule } from '../../shared/infrastructure/http/http-module.interface.ts';
+import type { HttpModule } from '../../shared/infrastructure/http/interfaces/http-module.interface.ts';
 import { ClaimOperation } from './application/use-cases/claim-operation.use-case.ts';
 import { CreateCashIn } from './application/use-cases/create-cash-in.use-case.ts';
 import { HandlePaymentWebhook } from './application/use-cases/handle-payment-webhook.use-case.ts';
@@ -9,10 +9,10 @@ import { MarkOperationUnknown } from './application/use-cases/mark-operation-unk
 import { ReconcileOperations } from './application/use-cases/reconcile-operations.use-case.ts';
 import { SettleOperation } from './application/use-cases/settle-operation.use-case.ts';
 import type { PaymentProvider } from './domain/gateways/payment-provider.gateway.ts';
-import { CashInController } from './infrastructure/http/cash-in.controller.ts';
-import { buildCashInRouter } from './infrastructure/http/cash-in.routes.ts';
-import { PaymentWebhookController } from './infrastructure/http/payment-webhook.controller.ts';
-import { DrizzleUnitOfWork } from './infrastructure/persistence/drizzle-unit-of-work.ts';
+import { CashInController } from './infrastructure/http/controllers/cash-in.controller.ts';
+import { buildCashInRouter } from './infrastructure/http/routes/cash-in.routes.ts';
+import { PaymentWebhookController } from './infrastructure/http/controllers/payment-webhook.controller.ts';
+import { DrizzleUnitOfWork } from './infrastructure/persistence/unit-of-work/drizzle-unit-of-work.ts';
 
 const ROOT_PATH = '/';
 

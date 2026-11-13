@@ -1,26 +1,11 @@
-import type { Operation } from '../../domain/entities/operation.entity.ts';
 import {
   toSettleOutcome,
   type PaymentWebhookEvent,
 } from '../../domain/value-objects/payment-webhook-event.value-object.ts';
-import {
-  classifyWebhookResult,
-  type WebhookEventResult,
-} from '../../domain/value-objects/webhook-event-result.value-object.ts';
+import { classifyWebhookResult } from '../../domain/value-objects/webhook-event-result.value-object.ts';
+import type { PaymentWebhookResult } from '../dtos/output/payment-webhook-result.dto.ts';
 import type { UnitOfWork } from '../ports/unit-of-work.port.ts';
 import { settleOperation } from '../services/settle-operation.service.ts';
-
-interface DuplicateWebhook {
-  duplicate: true;
-}
-
-interface ProcessedWebhook {
-  duplicate: false;
-  result: WebhookEventResult;
-  operation: Operation;
-}
-
-export type HandlePaymentWebhookResult = DuplicateWebhook | ProcessedWebhook;
 
 interface HandlePaymentWebhookDependencies {
   unitOfWork: UnitOfWork;
@@ -39,7 +24,7 @@ export class HandlePaymentWebhook {
     this.unitOfWork = unitOfWork;
   }
 
-  async execute(event: PaymentWebhookEvent): Promise<HandlePaymentWebhookResult> {
+  async execute(event: PaymentWebhookEvent): Promise<PaymentWebhookResult> {
     return this.unitOfWork.run(async (repositories) => {
       // 1. Duplicados: gana la primera entrega de un eventId; las demás no hacen nada (R5.3).
       const isFirstDelivery = await repositories.webhookEvents.insertIfNew(event);

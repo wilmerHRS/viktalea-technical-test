@@ -127,16 +127,38 @@ App ───────────────────▶ API (N pods) �
 
 ```
 src/modules/cash-in/
-├── domain/          entidades, value objects ("enums" as const, máquina de estados, Money) y puertos
-│                    (repositorios y gateway de la pasarela). Sin HTTP, SQL ni Drizzle.
-├── application/     TODA la lógica, legible paso a paso: casos de uso + Unit of Work
-│   ├── use-cases/   create-cash-in, claim-operation, settle-operation, mark-operation-unknown,
-│   │                handle-payment-webhook, reconcile-operations
-│   ├── services/    settle-operation (la ÚNICA forma de finalizar una operación)
-│   └── ports/       unit-of-work (varios repositorios en UNA transacción)
-└── infrastructure/  adaptadores: repositorios Drizzle (una sentencia atómica por método),
-                     controllers HTTP, validación zod, pasarela simulada y job del reconciliador
+├── cash-in.module.ts            composition root del módulo
+├── domain/                      SOLO negocio: sin HTTP, SQL ni Drizzle
+│   ├── entities/                operation.entity.ts
+│   ├── value-objects/           máquina de estados, Money, Currency, "enums" as const
+│   ├── repositories/            puertos de persistencia (interfaces)
+│   ├── gateways/                puerto hacia la pasarela de pagos
+│   └── errors/
+├── application/                 TODA la lógica, legible paso a paso
+│   ├── use-cases/               create-cash-in, claim-operation, settle-operation,
+│   │                            mark-operation-unknown, handle-payment-webhook, reconcile-operations
+│   ├── services/                settle-operation (la ÚNICA forma de finalizar), request-hash
+│   ├── ports/                   unit-of-work (varios repositorios en UNA transacción)
+│   ├── dtos/input/ y output/    lo que reciben y devuelven los casos de uso
+│   ├── mappers/                 entidad → resultado para el cliente
+│   └── constants/
+└── infrastructure/
+    ├── http/
+    │   ├── routes/              POST /cash-in, POST /webhooks/payment
+    │   ├── controllers/         cash-in, payment-webhook
+    │   ├── request/             validadores zod de la entrada
+    │   ├── response/            resultado → respuesta HTTP (200 / 202 / 402)
+    │   └── utils/               firma HMAC del webhook
+    ├── persistence/
+    │   ├── tables/              tablas de Drizzle
+    │   ├── repositories/        una sentencia atómica por método
+    │   ├── unit-of-work/        transacción de PostgreSQL
+    │   └── mappers/             fila → entidad
+    ├── providers/               pasarela simulada
+    └── jobs/                    reconciliador periódico
 ```
+
+Cada archivo lleva un sufijo que dice qué es (`.use-case.ts`, `.controller.ts`, `.repository.ts`, `.dto.ts`, `.mapper.ts`…) y vive en la carpeta de su tipo. Los tests siguen la misma idea: `tests/modules/cash-in/{unit,integration,http}/`.
 
 Decisiones principales:
 
