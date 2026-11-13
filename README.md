@@ -43,7 +43,7 @@ npm run dev                     # http://localhost:3000
 Calidad:
 
 ```bash
-npm test                # 133 tests contra PostgreSQL real (unitarios, integración, HTTP, multi-pod)
+npm test                # 145 tests contra PostgreSQL real (unitarios, integración, HTTP, multi-pod)
 npm run typecheck && npm run lint && npm run format:check
 ```
 
@@ -70,6 +70,7 @@ La pasarela es **simulada** (`fake-payment.provider.ts`) y su comportamiento se 
 | `card_timeout` | no cobra y no responde a tiempo |
 | `card_timeout_after_charge` | **cobra, pero la respuesta se pierde** (la pregunta central) |
 | `card_unavailable` | error de red |
+| `card_slow` | aprueba tras 3 s (deja tiempo a que llegue un webhook o a matar el pod) |
 
 ```bash
 curl -X POST localhost:3000/cash-in \
