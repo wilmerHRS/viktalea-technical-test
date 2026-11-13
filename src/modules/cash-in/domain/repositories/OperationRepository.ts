@@ -23,8 +23,9 @@ export interface OperationRepository {
   settle(id: string, outcome: SettleOutcome): Promise<{ applied: boolean; operation: Operation }>;
   /** The short reservation transaction is committed before returning. No provider calls here. */
   leasePendingBatch(olderThanMs: number, leaseMs: number, limit: number): Promise<Operation[]>;
-  applyWebhookEvent(event: PaymentWebhookEvent): Promise<
-    | { duplicate: true }
-    | { duplicate: false; result: WebhookEventResult; operation: Operation }
+  applyWebhookEvent(
+    event: PaymentWebhookEvent,
+  ): Promise<
+    { duplicate: true } | { duplicate: false; result: WebhookEventResult; operation: Operation }
   >;
 }

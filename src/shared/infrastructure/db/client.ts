@@ -18,7 +18,9 @@ export const createDb = (config: DbConfig): { db: Db; pool: Pool } => {
     connectionTimeoutMillis: DB_CONNECTION_TIMEOUT_MS,
   });
   // pg removes the failed idle client; the pool can open a fresh connection on the next query.
-  pool.on('error', (err) => { logger.error({ err }, 'Idle database connection failed'); });
+  pool.on('error', (err) => {
+    logger.error({ err }, 'Idle database connection failed');
+  });
   return { db: drizzle(pool, { schema }), pool };
 };
 

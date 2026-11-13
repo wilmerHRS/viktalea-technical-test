@@ -16,10 +16,14 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
 
   // Malformed JSON body sent by the client
   if (isJsonParseError(err)) {
-    res.status(HttpStatus.BAD_REQUEST).json({ error: { code: HttpErrorCode.INVALID_JSON, message: 'Malformed JSON body' } });
+    res
+      .status(HttpStatus.BAD_REQUEST)
+      .json({ error: { code: HttpErrorCode.INVALID_JSON, message: 'Malformed JSON body' } });
     return;
   }
 
   req.log.error({ err }, 'Request failed');
-  res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({ error: { code: ErrorCode.INTERNAL_ERROR, message: 'Internal server error' } });
+  res
+    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+    .json({ error: { code: ErrorCode.INTERNAL_ERROR, message: 'Internal server error' } });
 };

@@ -1,8 +1,11 @@
 import { ErrorCode } from '../../domain/errors/index.ts';
 import { HttpStatus } from './httpStatus.ts';
 
-export const HttpErrorCode = { INVALID_JSON: 'INVALID_JSON', ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND' } as const;
-export type HttpErrorCode = typeof HttpErrorCode[keyof typeof HttpErrorCode];
+export const HttpErrorCode = {
+  INVALID_JSON: 'INVALID_JSON',
+  ROUTE_NOT_FOUND: 'ROUTE_NOT_FOUND',
+} as const;
+export type HttpErrorCode = (typeof HttpErrorCode)[keyof typeof HttpErrorCode];
 
 export const errorStatusMap: Readonly<Record<string, HttpStatus>> = {
   [ErrorCode.VALIDATION_ERROR]: HttpStatus.BAD_REQUEST,

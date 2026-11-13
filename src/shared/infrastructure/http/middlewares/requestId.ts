@@ -14,13 +14,18 @@ declare global {
   }
 }
 
-export const createRequestId = (baseLogger: Logger = logger): RequestHandler => (req, res, next): void => {
-  const incomingId = req.get('X-Request-Id');
-  req.requestId = incomingId && VALID_REQUEST_ID.test(incomingId) ? incomingId : randomUUID();
-  req.log = baseLogger.child({ requestId: req.requestId });
-  res.setHeader('X-Request-Id', req.requestId);
-  res.on('finish', () => {
-    req.log.info({ method: req.method, path: req.path, statusCode: res.statusCode }, 'Request completed');
-  });
-  next();
-};
+export const createRequestId =
+  (baseLogger: Logger = logger): RequestHandler =>
+  (req, res, next): void => {
+    const incomingId = req.get('X-Request-Id');
+    req.requestId = incomingId && VALID_REQUEST_ID.test(incomingId) ? incomingId : randomUUID();
+    req.log = baseLogger.child({ requestId: req.requestId });
+    res.setHeader('X-Request-Id', req.requestId);
+    res.on('finish', () => {
+      req.log.info(
+        { method: req.method, path: req.path, statusCode: res.statusCode },
+        'Request completed',
+      );
+    });
+    next();
+  };

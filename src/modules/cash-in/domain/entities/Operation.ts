@@ -56,8 +56,12 @@ export class Operation implements Readonly<OperationData> {
 
   static create(input: NewOperation): Operation {
     const details: FieldError[] = [];
-    for (const [field, value] of [['user_id', input.userId], ['payment_method', input.paymentMethod]] as const) {
-      if (typeof value !== 'string' || value.trim().length === 0) details.push({ field, message: 'Must be a non-empty string' });
+    for (const [field, value] of [
+      ['user_id', input.userId],
+      ['payment_method', input.paymentMethod],
+    ] as const) {
+      if (typeof value !== 'string' || value.trim().length === 0)
+        details.push({ field, message: 'Must be a non-empty string' });
     }
     if (!SUPPORTED_CURRENCIES.some((currency) => currency === input.currency)) {
       details.push({ field: 'currency', message: `Must be ${Currency.PEN}` });
@@ -67,9 +71,18 @@ export class Operation implements Readonly<OperationData> {
     }
     if (details.length > 0) throw new ValidationError('Invalid cash-in operation', details);
     const now = new Date();
-    return new Operation({ ...input, status: OperationStatus.PROCESSING, providerChargeId: null, failureReason: null,
-      createdAt: now, updatedAt: now, newBalanceCents: null });
+    return new Operation({
+      ...input,
+      status: OperationStatus.PROCESSING,
+      providerChargeId: null,
+      failureReason: null,
+      createdAt: now,
+      updatedAt: now,
+      newBalanceCents: null,
+    });
   }
 
-  static restore(data: OperationData): Operation { return new Operation(data); }
+  static restore(data: OperationData): Operation {
+    return new Operation(data);
+  }
 }
