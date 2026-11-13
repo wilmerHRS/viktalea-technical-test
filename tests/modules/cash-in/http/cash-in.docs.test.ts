@@ -63,7 +63,7 @@ describe('Documentación OpenAPI / Swagger', () => {
   it('GET /docs/: sirve Swagger UI', async () => {
     const response = await request(app).get('/docs/').expect(200);
 
-    assert.match(response.headers['content-type'], /html/);
+    assert.match(response.headers['content-type'] ?? '', /html/);
     assert.match(response.text, /swagger-ui/i);
   });
 });
