@@ -46,3 +46,4 @@
 - Procesar webhooks sin deduplicar o permitir que un estado final cambie.
 - Llamar a la pasarela dentro de una transacción abierta (bloquea filas durante I/O externo).
 - Tests que mockean la base de datos y por eso no prueban la concurrencia real.
+`n### T1 — Infraestructura`nSe integraron Drizzle y pg, las cuatro tablas con la columna de lease, migraciones generadas y configuración validada. Se comprobó el SQL generado y las restricciones en PostgreSQL real. typecheck y 40 tests pasan. RECONCILE_LEASE_MS se declara desde T1 junto a las demás variables de §9; su relación con el timeout se comprobará al componer el reconciliador en T9 para mantener simple envSchema. El reexport de esquemas en shared sigue el diseño explícito de T1, como registro técnico de esquemas. Sin cambios en Docker ni en requirements/design.

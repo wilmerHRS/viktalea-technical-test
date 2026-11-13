@@ -3,6 +3,17 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  DB_HOST: z.string().min(1).default('localhost'),
+  DB_PORT: z.coerce.number().int().min(1).max(65535).default(5432),
+  DB_USER: z.string().min(1),
+  DB_PASSWORD: z.string().min(1),
+  DB_NAME: z.string().min(1),
+  WEBHOOK_SECRET: z.string().min(16),
+  PROVIDER_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  RECONCILE_INTERVAL_MS: z.coerce.number().int().positive().default(30000),
+  RECONCILE_AFTER_MS: z.coerce.number().int().positive().default(30000),
+  RECONCILE_LEASE_MS: z.coerce.number().int().positive().default(60000),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   // '*' or a comma-separated list: "https://app.com,http://localhost:5173"
   CORS_ORIGIN: z
     .string()

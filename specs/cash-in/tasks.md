@@ -18,7 +18,7 @@
 
 ## Tareas
 
-- [ ] **T1. Infraestructura de base de datos (Drizzle ORM)**: R8, NFR2, NFR3, NFR5
+- [x] **T1. Infraestructura de base de datos (Drizzle ORM)**: R8, NFR2, NFR3, NFR5
   - **Ya hecho (no rehacer):**
     - `docker-compose.yml` con `postgres:17-alpine`, usuario `cashin` y contraseña `cashin_local` definidos directamente en el archivo.
     - `docker/postgres/init/01-create-test-db.sh`, que crea `cashin_test`.
