@@ -7,15 +7,18 @@ import {
   transitions,
   FINAL_STATUSES,
   SETTLEABLE_STATUSES,
-} from '../../../src/modules/cash-in/domain/value-objects/OperationStatus.ts';
-import { toCents, fromCents } from '../../../src/modules/cash-in/domain/value-objects/Money.ts';
+} from '../../../src/modules/cash-in/domain/value-objects/operation-status.value-object.ts';
+import {
+  toCents,
+  fromCents,
+} from '../../../src/modules/cash-in/domain/value-objects/money.value-object.ts';
 import {
   Operation,
   type NewOperation,
-} from '../../../src/modules/cash-in/domain/entities/Operation.ts';
-import { classifyWebhookResult } from '../../../src/modules/cash-in/domain/value-objects/WebhookEventResult.ts';
-import { ChargeOutcome } from '../../../src/modules/cash-in/domain/gateways/PaymentProvider.ts';
-import { ValidationError } from '../../../src/shared/domain/errors/index.ts';
+} from '../../../src/modules/cash-in/domain/entities/operation.entity.ts';
+import { classifyWebhookResult } from '../../../src/modules/cash-in/domain/value-objects/webhook-event-result.value-object.ts';
+import { ChargeOutcome } from '../../../src/modules/cash-in/domain/gateways/payment-provider.gateway.ts';
+import { ValidationError } from '../../../src/shared/domain/errors/app.errors.ts';
 
 describe('OperationStatus (R3)', () => {
   const allowed = new Set([

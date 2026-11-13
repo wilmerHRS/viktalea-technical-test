@@ -42,11 +42,11 @@ Spec activo: [`specs/cash-in/`](specs/cash-in/) (challenge Wallet Cash-In).
 
 Base de datos local: las credenciales están directamente en `docker-compose.yml` (usuario `cashin`, contraseña `cashin_local`, bases `cashin` y `cashin_test`, puerto 5432). La app se conecta con `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` y `DB_NAME` de `.env`, que deben coincidir con esos valores. Postgres aplica las credenciales **solo al crear el volumen**: si las cambias en el compose, ejecuta `npm run db:reset` (borra los datos) y actualiza `.env`.
 
-Acceso a datos: **Drizzle ORM** (`drizzle-orm` + `pg`, migraciones con `drizzle-kit`). El esquema Drizzle vive en `modules/<module>/infrastructure/persistence/schema.ts`; el dominio nunca importa Drizzle. Usa el query builder por defecto y SQL crudo (`` sql`…` ``, `db.execute`) cuando sea más claro o correcto. Para idempotencia, transiciones de estado y saldo se usan siempre operaciones atómicas en la BD (`onConflictDoNothing`, `UPDATE … WHERE status IN`, `` sql`col + x` ``, `.for('update', { skipLocked: true })`), nunca "leer, comprobar y escribir".
+Acceso a datos: **Drizzle ORM** (`drizzle-orm` + `pg`, migraciones con `drizzle-kit`). El esquema Drizzle vive en `modules/<module>/infrastructure/persistence/<module>.tables.ts`; el dominio nunca importa Drizzle. Usa el query builder por defecto y SQL crudo (`` sql`…` ``, `db.execute`) cuando sea más claro o correcto. Para idempotencia, transiciones de estado y saldo se usan siempre operaciones atómicas en la BD (`onConflictDoNothing`, `UPDATE … WHERE status IN`, `` sql`col + x` ``, `.for('update', { skipLocked: true })`), nunca "leer, comprobar y escribir".
 
 Antes de dar una tarea por terminada: `npm run typecheck && npm run lint && npm run format:check && npm test`.
 
-Variables de entorno: ver `.env.example` (`NODE_ENV`, `PORT`, `CORS_ORIGIN`). Se leen **solo** en `src/config/env.ts`, que las valida con un esquema **zod** al arrancar. Si alguna es inválida, la app no inicia y muestra cuál falla. El resto del código importa `env` (tipado, p. ej. `env.PORT`). Para añadir una variable: agrégala al `envSchema` (con `.default()` si es opcional), a `.env.example` y a `tests/config/env.test.ts`. Mantén el esquema simple, sin reglas condicionales.
+Variables de entorno: ver `.env.example` (`NODE_ENV`, `PORT`, `CORS_ORIGIN`). Se leen **solo** en `src/config/env.config.ts`, que las valida con un esquema **zod** al arrancar. Si alguna es inválida, la app no inicia y muestra cuál falla. El resto del código importa `env` (tipado, p. ej. `env.PORT`). Para añadir una variable: agrégala al `envSchema` (con `.default()` si es opcional), a `.env.example` y a `tests/config/env.test.ts`. Mantén el esquema simple, sin reglas condicionales.
 
 ## Arquitectura: Clean Architecture modular
 
@@ -63,11 +63,11 @@ src/
 │   │   └── errors/            # AppError, ValidationError, NotFoundError, ConflictError, FieldError
 │   └── infrastructure/
 │       └── http/
-│           ├── HttpModule.ts  # Interface { basePath, router } que expone cada módulo
+│           ├── http-module.interface.ts  # Interface { basePath, router } que expone cada módulo
 │           └── middlewares/   # errorHandler, notFound
 └── modules/
     └── <module>/              # p. ej. users/
-        ├── index.ts           # Composition root del módulo (inyección de dependencias manual)
+        ├── <module>.module.ts # Composition root del módulo (inyección de dependencias manual)
         ├── domain/            # Núcleo: SOLO conceptos de negocio (sin HTTP, SQL, ORM ni detalles de infraestructura)
         │   ├── entities/      # Entidades con invariantes y factorías (Entity.create / Entity.restore)
         │   ├── value-objects/ # Valores y reglas puras: "enums" as const, máquina de estados, Money…
@@ -97,12 +97,31 @@ infrastructure  →  application  →  domain
 - `domain/` **no importa** de `application/`, `infrastructure/`, `express` ni ninguna librería de I/O. Solo puede importar de `shared/domain`.
 - `application/` importa de `domain/` y `shared/domain`. **Nunca** de `infrastructure/` ni de `express`. Recibe los repositorios por constructor (tipados contra el puerto del dominio).
 - `infrastructure/` puede importar de todas las capas y de librerías externas.
-- Un módulo **no importa archivos internos de otro módulo**. Si dos módulos necesitan colaborar, se expone un caso de uso/puerto desde el `index.ts` del módulo proveedor y se inyecta en el composition root.
+- Un módulo **no importa archivos internos de otro módulo**. Si dos módulos necesitan colaborar, se expone un caso de uso/puerto desde el `<module>.module.ts` del módulo proveedor y se inyecta en el composition root.
 - `shared/` no importa nada de `modules/`.
 
 ### Convenciones
 
-- **Nombres de archivo**: clases e interfaces en `PascalCase.ts` (`CreateUser.ts`, `UserRepository.ts`); funciones/fábricas en `camelCase.ts` (`userRoutes.ts`, `errorHandler.ts`).
+- **Nombres de archivo**: `kebab-case` + **sufijo que dice qué es**: `<nombre>.<tipo>.ts`. La clase o función de dentro va en PascalCase o camelCase (`create-cash-in.use-case.ts` → `class CreateCashIn`).
+
+  | Sufijo | Qué contiene | Ejemplo |
+  |---|---|---|
+  | `.entity.ts` | entidad de dominio | `operation.entity.ts` |
+  | `.value-object.ts` | value object / "enum" / regla pura | `operation-status.value-object.ts` |
+  | `.repository.ts` | puerto de persistencia (dominio) o su implementación (`drizzle-…`) | `operation.repository.ts`, `drizzle-operation.repository.ts` |
+  | `.gateway.ts` | puerto hacia un sistema externo | `payment-provider.gateway.ts` |
+  | `.port.ts` | puerto de la capa de aplicación | `unit-of-work.port.ts` |
+  | `.use-case.ts` | caso de uso (una clase con `execute`) | `create-cash-in.use-case.ts` |
+  | `.service.ts` | paso de aplicación reutilizado por varios casos de uso | `settle-operation.service.ts` |
+  | `.dto.ts` | datos de entrada/salida de la aplicación | `cash-in-result.dto.ts` |
+  | `.controller.ts` / `.routes.ts` / `.presenter.ts` / `.validation.ts` | capa HTTP | `cash-in.controller.ts` |
+  | `.middleware.ts` | middleware de Express | `request-id.middleware.ts` |
+  | `.provider.ts` | adaptador de un gateway | `fake-payment.provider.ts` |
+  | `.tables.ts` / `.mapper.ts` | tablas de Drizzle / fila → entidad | `cash-in.tables.ts` |
+  | `.job.ts` | tarea periódica | `reconciler.job.ts` |
+  | `.module.ts` | composition root de un módulo | `cash-in.module.ts` |
+  | `.util.ts` / `.constants.ts` / `.errors.ts` / `.config.ts` | helpers, constantes, errores, configuración | `with-timeout.util.ts` |
+  | `.test.ts` / `.fixture.ts` | tests y datos de prueba | `cash-in.http.test.ts` |
 - **Tipado**: nada de `any`; para datos externos sin validar usa `unknown` y valida en la entidad. Tipa explícitamente los retornos de funciones públicas. Los puertos son `interface` y los adaptadores usan `implements`.
 - **Idioma**: los **comentarios y la documentación van en español**; los identificadores (variables, funciones, clases, archivos) y los mensajes de la API, en inglés.
 - **Helpers y utilidades**: nunca sueltos entre el código de una clase o servicio. Si los usa una sola clase, van como **métodos privados** de esa clase. Si los usan varios archivos, van en **un archivo propio** con nombre descriptivo (p. ej. `shared/utils/withTimeout.ts`, `shared/infrastructure/db/sqlTime.ts`, `infrastructure/persistence/operationMapper.ts`).
@@ -119,7 +138,7 @@ infrastructure  →  application  →  domain
   - Nunca se llama a un sistema externo dentro de `run`.
 - **Casos de uso**: una clase por caso, constructor con objeto de dependencias tipado `{ userRepository, ... }` (campos `private readonly`), único método público `async execute(input): Promise<Dto>`. Devuelven DTOs, nunca entidades.
 - **Entidades**: constructor `private`; `static create(...)` valida invariantes y lanza `ValidationError` con `details: FieldError[]`; `static restore(...)` rehidrata desde persistencia sin validar. Propiedades `readonly`.
-- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/errorStatusMap.ts`. No construir respuestas de error a mano en los controllers.
+- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/error-status.map.ts`. No construir respuestas de error a mano en los controllers.
 - **Constantes y "enums"**: ningún literal de negocio repetido (estados, monedas, resultados, prefijos, tamaños de lote, códigos HTTP, tiempos). Se define una vez como constante con nombre, **junto al concepto que describe** (no en un `constants.ts` global), y se importa. Para conjuntos cerrados se usa un objeto `as const` más un tipo derivado, no `enum` de TypeScript:
   ```ts
   export const Currency = { PEN: 'PEN' } as const;
@@ -132,7 +151,7 @@ infrastructure  →  application  →  domain
   - Error: `{ "error": { "code": "VALIDATION_ERROR", "message": "...", "details": [...] } }`
 - **Rutas**: todos los módulos se montan bajo `/api/v1/<basePath>`. `/health` queda fuera del prefijo.
 - **IDs**: `crypto.randomUUID()` inyectado como `idGenerator` para poder fijarlo en tests.
-- **Config**: no leer `process.env` fuera de `src/config/env.ts`.
+- **Config**: no leer `process.env` fuera de `src/config/env.config.ts`.
 
 ### Testing
 
@@ -148,7 +167,7 @@ Usar la skill **`/new-module`** (`.claude/skills/new-module/SKILL.md`) o seguir 
 2. Definir en `domain/` las entidades (`entities/`), los value objects y "enums" (`value-objects/`), los puertos de persistencia (`repositories/`) y, si hay sistemas externos, sus puertos (`gateways/`).
 3. Implementar casos de uso en `application/use-cases/` + tipos/DTO en `application/dtos/`.
 4. Implementar adaptadores en `infrastructure/persistence/` e `infrastructure/http/` (controller + router).
-5. Cablear todo en `src/modules/<module>/index.ts` exportando `create<Module>Module(overrides): HttpModule` y su tipo `<Module>ModuleOverrides`.
+5. Cablear todo en `src/modules/<module>/<module>.module.ts` exportando `create<Module>Module(overrides): HttpModule` y su tipo `<Module>ModuleOverrides`.
 6. Registrar el módulo en la lista que `src/main.ts` pasa a `createApp([...])`.
 7. Añadir tests en `tests/modules/<module>/` y ejecutar `npm run typecheck && npm test`.
 

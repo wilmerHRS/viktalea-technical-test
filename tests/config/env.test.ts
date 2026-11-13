@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { loadEnv } from '../../src/config/env.ts';
+import { loadEnv } from '../../src/config/env.config.ts';
 
 const required = {
   DB_USER: 'cashin',

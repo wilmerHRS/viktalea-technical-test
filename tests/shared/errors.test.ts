@@ -9,7 +9,7 @@ import {
   ValidationError,
   NotFoundError,
   ConflictError,
-} from '../../src/shared/domain/errors/index.ts';
+} from '../../src/shared/domain/errors/app.errors.ts';
 
 for (const [error, status, expected] of [
   [

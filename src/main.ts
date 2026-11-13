@@ -1,9 +1,9 @@
 import { createApp } from './app.ts';
-import { env } from './config/env.ts';
-import { createCashInModule } from './modules/cash-in/index.ts';
-import { FakePaymentProvider } from './modules/cash-in/infrastructure/provider/FakePaymentProvider.ts';
-import { createDb } from './shared/infrastructure/db/client.ts';
-import { logger } from './shared/infrastructure/logging/logger.ts';
+import { env } from './config/env.config.ts';
+import { createCashInModule } from './modules/cash-in/cash-in.module.ts';
+import { FakePaymentProvider } from './modules/cash-in/infrastructure/provider/fake-payment.provider.ts';
+import { createDb } from './shared/infrastructure/db/db.client.ts';
+import { logger } from './shared/infrastructure/logging/logger.config.ts';
 
 const { db, pool } = createDb(env);
 

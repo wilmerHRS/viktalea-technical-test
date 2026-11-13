@@ -1,12 +1,12 @@
 import express, { type Express } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { env } from './config/env.ts';
-import type { HttpModule } from './shared/infrastructure/http/HttpModule.ts';
-import { errorHandler } from './shared/infrastructure/http/middlewares/errorHandler.ts';
-import { notFound } from './shared/infrastructure/http/middlewares/notFound.ts';
-import { createRequestId } from './shared/infrastructure/http/middlewares/requestId.ts';
-import { captureRawBody } from './shared/infrastructure/http/rawBody.ts';
+import { env } from './config/env.config.ts';
+import type { HttpModule } from './shared/infrastructure/http/http-module.interface.ts';
+import { errorHandler } from './shared/infrastructure/http/middlewares/error-handler.middleware.ts';
+import { notFound } from './shared/infrastructure/http/middlewares/not-found.middleware.ts';
+import { createRequestId } from './shared/infrastructure/http/middlewares/request-id.middleware.ts';
+import { captureRawBody } from './shared/infrastructure/http/raw-body.util.ts';
 import type { Logger } from 'pino';
 
 export interface AppOptions {
