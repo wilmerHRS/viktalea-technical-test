@@ -8,16 +8,20 @@ export const WebhookEventResult = {
 } as const;
 export type WebhookEventResult = (typeof WebhookEventResult)[keyof typeof WebhookEventResult];
 
+export interface WebhookClassification {
+  applied: boolean;
+  eventStatus: ChargeOutcome;
+  finalStatus: OperationStatus;
+}
+
 export const classifyWebhookResult = ({
   applied,
   eventStatus,
   finalStatus,
-}: {
-  applied: boolean;
-  eventStatus: ChargeOutcome;
-  finalStatus: OperationStatus;
-}): WebhookEventResult => {
-  if (applied) return WebhookEventResult.APPLIED;
+}: WebhookClassification): WebhookEventResult => {
+  if (applied) {
+    return WebhookEventResult.APPLIED;
+  }
   const expectedStatus =
     eventStatus === ChargeOutcome.APPROVED ? OperationStatus.COMPLETED : OperationStatus.FAILED;
   return finalStatus === expectedStatus ? WebhookEventResult.IGNORED : WebhookEventResult.CONFLICT;

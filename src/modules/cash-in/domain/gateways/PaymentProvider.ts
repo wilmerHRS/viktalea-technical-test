@@ -15,15 +15,21 @@ export type ChargeResult =
   | { outcome: typeof ChargeOutcome.APPROVED; providerChargeId: string }
   | { outcome: typeof ChargeOutcome.DECLINED; reason: string };
 
+export interface ChargeRequest {
+  idempotencyKey: string;
+  amountCents: number;
+  currency: Currency;
+  paymentMethod: string;
+}
+
+export interface ChargeStatusResult {
+  status: ProviderChargeStatus;
+  providerChargeId?: string;
+  reason?: string;
+}
+
 export interface PaymentProvider {
   /** idempotencyKey = operation.id. Never retry charge after an ambiguous result. */
-  charge(req: {
-    idempotencyKey: string;
-    amountCents: number;
-    currency: Currency;
-    paymentMethod: string;
-  }): Promise<ChargeResult>;
-  getChargeStatus(
-    idempotencyKey: string,
-  ): Promise<{ status: ProviderChargeStatus; providerChargeId?: string; reason?: string }>;
+  charge(req: ChargeRequest): Promise<ChargeResult>;
+  getChargeStatus(idempotencyKey: string): Promise<ChargeStatusResult>;
 }

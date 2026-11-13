@@ -12,7 +12,11 @@ import type { Logger } from 'pino';
  * Builds the Express app and mounts the given modules at the root.
  * The modules are created by the caller (main.ts in production, each test in tests).
  */
-export const createApp = (modules: HttpModule[], options: { logger?: Logger } = {}): Express => {
+export interface AppOptions {
+  logger?: Logger;
+}
+
+export const createApp = (modules: HttpModule[], options: AppOptions = {}): Express => {
   const app = express();
 
   app.disable('x-powered-by');

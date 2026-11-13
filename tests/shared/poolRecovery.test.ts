@@ -46,7 +46,9 @@ it(
         true,
         'Only terminate the known idle connection in cashin_test',
       );
-      if (child.connected) child.send('recover');
+      if (child.connected) {
+        child.send('recover');
+      }
       const [code, signal] = await exited;
       assert.equal(signal, null, stderr);
       assert.equal(code, 0, stderr);
@@ -69,7 +71,9 @@ it(
         'The production pool error handler must log 57P01',
       );
     } finally {
-      if (child.exitCode === null) child.kill();
+      if (child.exitCode === null) {
+        child.kill();
+      }
       await pool.end();
     }
   },

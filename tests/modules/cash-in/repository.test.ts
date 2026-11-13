@@ -5,7 +5,7 @@ import { eq, sql } from 'drizzle-orm';
 import { env } from '../../../src/config/env.ts';
 import { createDb } from '../../../src/shared/infrastructure/db/client.ts';
 import type { NewOperation } from '../../../src/modules/cash-in/domain/entities/Operation.ts';
-import type { PaymentWebhookEvent } from '../../../src/modules/cash-in/domain/repositories/OperationRepository.ts';
+import type { PaymentWebhookEvent } from '../../../src/modules/cash-in/domain/value-objects/PaymentWebhookEvent.ts';
 import { DrizzleOperationRepository } from '../../../src/modules/cash-in/infrastructure/persistence/DrizzleOperationRepository.ts';
 import {
   operations,
@@ -46,7 +46,7 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     await Promise.all([first.pool.end(), second.pool.end()]);
   });
 
-  it('(a) concurrent claims from independent pools create one operation for a global key', async () => {
+  it('(a) independent pools claim one global key', async () => {
     const input = newOperation();
     // Different users avoid serializing on the wallet row: the global key itself must arbitrate.
     const results = await Promise.all([
@@ -64,8 +64,9 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     assert.equal(results[0]!.operation.requestHash, results[1]!.operation.requestHash);
     assert.equal((await first.db.select().from(operations)).length, 1);
     assert.equal((await first.db.select().from(ledgerEntries)).length, 0);
-    for (const wallet of await first.db.select().from(wallets))
+    for (const wallet of await first.db.select().from(wallets)) {
       assert.equal(wallet.balanceCents, 0);
+    }
   });
 
   it('(a) same-user, same-payload concurrent claims also return the same operation', async () => {
@@ -79,7 +80,7 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     assert.equal((await first.db.select().from(operations)).length, 1);
   });
 
-  it('(b) concurrent settlements credit exactly once and both return the persisted result', async () => {
+  it('(b) concurrent settlements return one persisted credit', async () => {
     const { operation } = await repo.claim(newOperation());
     const results = await Promise.all([
       repo.settle(operation.id, approved),
@@ -110,9 +111,11 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     }
   });
 
-  it('(d) 20 concurrent operations on one wallet preserve the exact sum and historical balances', async () => {
+  it('(d) 20 concurrent credits preserve the sum and historical balances', async () => {
     const inputs = Array.from({ length: 20 }, (_, i) => newOperation({ amountCents: 101 + i }));
-    for (const input of inputs) await repo.claim(input);
+    for (const input of inputs) {
+      await repo.claim(input);
+    }
     const results = await Promise.all(
       inputs.map((input, i) => (i % 2 ? repo : other).settle(input.id, approved)),
     );
@@ -136,7 +139,7 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     }
   });
 
-  it('markUnknown only transitions PROCESSING, and UNKNOWN can settle without a second credit', async () => {
+  it('markUnknown is conditional and UNKNOWN can settle once', async () => {
     const { operation } = await repo.claim(newOperation());
     await repo.markUnknown(operation.id);
     const unknown = await repo.findById(operation.id);
@@ -159,14 +162,12 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
   it('rolls back operation and wallet when the ledger insert fails', async () => {
     const { operation } = await repo.claim(newOperation());
     // Force the unique ledger safety net to reject settlement after the wallet UPDATE.
-    await first.db
-      .insert(ledgerEntries)
-      .values({
-        operationId: operation.id,
-        userId: operation.userId,
-        amountCents: operation.amountCents,
-        balanceAfterCents: 10000,
-      });
+    await first.db.insert(ledgerEntries).values({
+      operationId: operation.id,
+      userId: operation.userId,
+      amountCents: operation.amountCents,
+      balanceAfterCents: 10000,
+    });
     await assert.rejects(repo.settle(operation.id, approved));
     assert.equal((await repo.findById(operation.id))?.status, 'PROCESSING');
     assert.equal((await first.db.select().from(wallets))[0]!.balanceCents, 0);
@@ -196,7 +197,7 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     assert.deepEqual(await other.applyWebhookEvent(event), { duplicate: true });
   });
 
-  it('rolls back event, settlement, balance and ledger if saving the webhook result fails', async () => {
+  it('rolls back all effects when saving the webhook result fails', async () => {
     const { operation } = await repo.claim(newOperation());
     const event: PaymentWebhookEvent = {
       eventId: 'evt_atomic',
@@ -227,7 +228,7 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     assert.equal((await first.db.select().from(webhookEvents))[0]!.result, 'applied');
   });
 
-  it('classifies a declined event over COMPLETED as conflict, preserving the final response', async () => {
+  it('declined over COMPLETED is a conflict and preserves the response', async () => {
     const { operation } = await repo.claim(newOperation());
     const final = await repo.settle(operation.id, approved);
     const result = await other.applyWebhookEvent({
@@ -237,7 +238,9 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
       payload: {},
     });
     assert.equal(result.duplicate, false);
-    if (result.duplicate) assert.fail('First event must be processed');
+    if (result.duplicate) {
+      assert.fail('First event must be processed');
+    }
     assert.equal(result.result, 'conflict');
     assert.deepEqual(result.operation, final.operation);
     assert.equal((await first.db.select().from(webhookEvents))[0]!.result, 'conflict');
@@ -256,7 +259,9 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
       payload: {},
     });
     assert.equal(result.duplicate, false);
-    if (result.duplicate) assert.fail('First event must be processed');
+    if (result.duplicate) {
+      assert.fail('First event must be processed');
+    }
     assert.equal(result.result, 'ignored');
     assert.equal(result.operation.providerChargeId, approved.providerChargeId);
     assert.equal((await first.db.select().from(webhookEvents))[0]!.result, 'ignored');
@@ -272,14 +277,16 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
       payload: {},
     });
     assert.equal(result.duplicate, false);
-    if (result.duplicate) assert.fail('First event must be processed');
+    if (result.duplicate) {
+      assert.fail('First event must be processed');
+    }
     assert.equal(result.result, 'applied');
     assert.equal(result.operation.status, 'FAILED');
     assert.equal((await first.db.select().from(wallets))[0]!.balanceCents, 0);
     assert.equal((await first.db.select().from(ledgerEntries)).length, 0);
   });
 
-  it('leaves no webhook record for an unknown operation or an invalid approval', async () => {
+  it('leaves no webhook record for an unknown operation', async () => {
     await assert.rejects(
       repo.applyWebhookEvent({
         eventId: 'evt_missing',
@@ -290,21 +297,10 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
       }),
       /not found/,
     );
-    const { operation } = await repo.claim(newOperation());
-    await assert.rejects(
-      repo.applyWebhookEvent({
-        eventId: 'evt_invalid',
-        operationId: operation.id,
-        status: 'approved',
-        payload: {},
-      }),
-      /Missing provider charge ID/,
-    );
     assert.equal((await first.db.select().from(webhookEvents)).length, 0);
-    assert.equal((await repo.findById(operation.id))?.status, 'PROCESSING');
   });
 
-  it('(e) concurrent leases return disjoint batches; expired leases can be acquired again', async () => {
+  it('(e) concurrent leases are disjoint and expired leases can be reacquired', async () => {
     for (let i = 0; i < 20; i++) {
       const { operation } = await repo.claim(newOperation());
       await repo.markUnknown(operation.id);
@@ -347,7 +343,7 @@ describe('DrizzleOperationRepository against PostgreSQL (T4)', { concurrency: fa
     assert.equal((await repo.findById(expired.id))?.status, 'COMPLETED');
   });
 
-  it('leases UNKNOWN and stale PROCESSING, excluding recent, reserved and final operations', async () => {
+  it('leases only eligible UNKNOWN or stale PROCESSING operations', async () => {
     const stale = (await repo.claim(newOperation())).operation;
     await first.db
       .update(operations)

@@ -5,12 +5,10 @@ import { logger } from '../../logging/logger.ts';
 
 const VALID_REQUEST_ID = /^[A-Za-z0-9._-]{1,128}$/;
 
-declare global {
-  namespace Express {
-    interface Request {
-      requestId: string;
-      log: Logger;
-    }
+declare module 'express-serve-static-core' {
+  interface Request {
+    requestId: string;
+    log: Logger;
   }
 }
 

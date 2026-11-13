@@ -60,8 +60,9 @@ export class Operation implements Readonly<OperationData> {
       ['user_id', input.userId],
       ['payment_method', input.paymentMethod],
     ] as const) {
-      if (typeof value !== 'string' || value.trim().length === 0)
+      if (typeof value !== 'string' || value.trim().length === 0) {
         details.push({ field, message: 'Must be a non-empty string' });
+      }
     }
     if (!SUPPORTED_CURRENCIES.some((currency) => currency === input.currency)) {
       details.push({ field: 'currency', message: `Must be ${Currency.PEN}` });
@@ -69,7 +70,9 @@ export class Operation implements Readonly<OperationData> {
     if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) {
       details.push({ field: 'amount', message: 'Must be a positive integer number of cents' });
     }
-    if (details.length > 0) throw new ValidationError('Invalid cash-in operation', details);
+    if (details.length > 0) {
+      throw new ValidationError('Invalid cash-in operation', details);
+    }
     const now = new Date();
     return new Operation({
       ...input,

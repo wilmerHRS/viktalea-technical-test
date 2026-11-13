@@ -8,7 +8,12 @@ export const DB_CONNECTION_TIMEOUT_MS = 5000;
 
 export type DbConfig = Pick<Env, 'DB_HOST' | 'DB_PORT' | 'DB_USER' | 'DB_PASSWORD' | 'DB_NAME'>;
 
-export const createDb = (config: DbConfig): { db: Db; pool: Pool } => {
+export interface DbConnection {
+  db: Db;
+  pool: Pool;
+}
+
+export const createDb = (config: DbConfig): DbConnection => {
   const pool = new Pool({
     host: config.DB_HOST,
     port: config.DB_PORT,

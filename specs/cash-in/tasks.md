@@ -78,7 +78,7 @@
      - `X-Request-Id` entrante: aceptarlo solo si cumple `^[A-Za-z0-9._-]{1,128}$`; si no, generar un UUID nuevo. Añadir un test.
   - **Acepta cuando**: `npm run typecheck` y `npm test` pasan; el grep `grep -rnE "'(PROCESSING|UNKNOWN|COMPLETED|FAILED|PEN|applied|ignored|conflict)'" src` solo encuentra las **definiciones** de las constantes; `domain/` no importa nada de `infrastructure/`, de Drizzle ni de Express; y `npm run db:generate` informa que no hay cambios.
 
-- [ ] **T4.2. Legibilidad, formato y contratos con nombre** (hacer antes de T5): design §2.2
+- [x] **T4.2. Legibilidad, formato y contratos con nombre** (hacer antes de T5): design §2.2
   > Origen: revisión humana de T4.1. Hay 101 líneas de más de 100 caracteres (hasta 146) en 19 archivos, condiciones SQL anidadas en una sola expresión, tipos anónimos en las firmas de los puertos y lógica de negocio en el repositorio. Causa raíz: el proyecto no tiene formatter ni linter. **No cambia el comportamiento**: los 106 tests existentes deben seguir pasando.
   1. **Herramientas.**
      - Instalar y configurar Prettier y ESLint (`typescript-eslint`, flat config `eslint.config.js`) según design §2.2.1.
@@ -155,6 +155,11 @@
   - **Acepta cuando**: un tercero puede clonar el repo, ejecutar `npm run db:up && npm run db:migrate && npm test`, y entender cada decisión.
 
 ## Dudas del implementador
+- **T4.2 — Compatibilidad de herramientas.** npm rechazó typescript-eslint 8.72.2 con TypeScript 7.0.2: el peer declarado es >=4.8.4 <6.1.0. Se adoptó TypeScript ~6.0.0, sin forzar peers ni desactivar reglas. El spec no fija una versión de TypeScript; typecheck y tests verifican la compatibilidad del código.
+
+- **T4.2 / T8 — Validación de aprobaciones y tests anteriores.** T4.2 pide retirar la validación del repositorio y diferirla a T8, pero una parte del test anterior exigía ese rechazo en el adaptador. Se sigue la instrucción específica: el test conserva la comprobación de operación inexistente; la aserción del identificador ausente queda pendiente para T8, donde se validará antes de acceder al repositorio. PaymentWebhookEvent representa entrada validada mediante una unión discriminada: una aprobación exige providerChargeId; no se fabrica un identificador ni se usa una aserción no nula. Se conservan los 106 casos y se añaden dos de toSettleOutcome. Esto sustituye la decisión anterior de validar ese campo en el adaptador.
+
+- **T4.2 — Ampliación de tipos Express.** recommended de ESLint rechaza el namespace Express global. Se cambió a ampliación del módulo express-serve-static-core, conservando req.requestId/req.log y el comportamiento. No se desactivó la regla. El cuarto parámetro de errorHandler sigue presente por la detección de handlers de Express; se marca explícitamente como utilizado con void.
 
 > El agente que implementa anota aquí lo que encuentre incorrecto o ambiguo en el spec, con la tarea afectada y qué decidió (o si se detuvo).
 

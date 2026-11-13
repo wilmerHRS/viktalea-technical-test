@@ -16,7 +16,9 @@ try {
 
   // Do not attach an 'error' listener here: the production handler must keep this process alive.
   const deadline = Date.now() + 5000;
-  while (pool.totalCount !== 0 && Date.now() < deadline) await setTimeout(10);
+  while (pool.totalCount !== 0 && Date.now() < deadline) {
+    await setTimeout(10);
+  }
   assert.equal(pool.totalCount, 0, 'pg must discard the failed idle connection');
   const result = await db.execute<{ value: number }>(sql`select 1 as value`);
   assert.equal(result.rows[0]!.value, 1);

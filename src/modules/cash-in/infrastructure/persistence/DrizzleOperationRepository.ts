@@ -1,12 +1,18 @@
 import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { NotFoundError, ValidationError } from '../../../../shared/domain/errors/index.ts';
+import { NotFoundError } from '../../../../shared/domain/errors/index.ts';
 import type { Db, Tx } from '../../../../shared/infrastructure/db/client.ts';
 import { Operation, type NewOperation } from '../../domain/entities/Operation.ts';
 import type {
   OperationRepository,
-  SettleOutcome,
-  PaymentWebhookEvent,
+  ClaimResult,
+  SettleResult,
+  ApplyWebhookEventResult,
 } from '../../domain/repositories/OperationRepository.ts';
+import type { SettleOutcome } from '../../domain/value-objects/SettleOutcome.ts';
+import {
+  toSettleOutcome,
+  type PaymentWebhookEvent,
+} from '../../domain/value-objects/PaymentWebhookEvent.ts';
 import {
   OperationStatus,
   SETTLEABLE_STATUSES,
@@ -15,91 +21,105 @@ import {
   classifyWebhookResult,
   WebhookEventResult,
 } from '../../domain/value-objects/WebhookEventResult.ts';
-import { ChargeOutcome, DEFAULT_DECLINE_REASON } from '../../domain/gateways/PaymentProvider.ts';
 import { ledgerEntries, operations, wallets, webhookEvents } from './schema.ts';
 
 type OperationRow = typeof operations.$inferSelect;
+type Executor = Db | Tx;
 
-const restore = (row: OperationRow, newBalanceCents: number | null = null): Operation => {
-  const { reconcileLockedUntil: _lease, ...data } = row;
-  return Operation.restore({ ...data, newBalanceCents });
-};
+interface RepositoryDependencies {
+  db: Db;
+}
+
+const millisecondsAgo = (ms: number) => sql`now() - ${ms} * interval '1 millisecond'`;
+const millisecondsFromNow = (ms: number) => sql`now() + ${ms} * interval '1 millisecond'`;
+
+const toOperation = (row: OperationRow, newBalanceCents: number | null = null): Operation =>
+  Operation.restore({ ...row, newBalanceCents });
 
 export class DrizzleOperationRepository implements OperationRepository {
   private readonly db: Db;
 
-  constructor({ db }: { db: Db }) {
+  constructor({ db }: RepositoryDependencies) {
     this.db = db;
   }
 
-  async claim(input: NewOperation): Promise<{ created: boolean; operation: Operation }> {
-    const operation = Operation.create(input);
+  private selectOperationWithBalance(executor: Executor) {
+    return executor
+      .select({ row: operations, balance: ledgerEntries.balanceAfterCents })
+      .from(operations)
+      .leftJoin(ledgerEntries, eq(ledgerEntries.operationId, operations.id));
+  }
+
+  async claim(input: NewOperation): Promise<ClaimResult> {
     return this.db.transaction(async (tx) => {
-      await tx.insert(wallets).values({ userId: operation.userId }).onConflictDoNothing();
+      await tx.insert(wallets).values({ userId: input.userId }).onConflictDoNothing();
       const [inserted] = await tx
         .insert(operations)
-        .values({
-          ...input,
-          status: operation.status,
-        })
+        .values({ ...input, status: OperationStatus.PROCESSING })
         .onConflictDoNothing({ target: operations.idempotencyKey })
         .returning();
-      if (inserted) return { created: true, operation: restore(inserted) };
-
-      const [existing] = await tx
-        .select({ row: operations, balance: ledgerEntries.balanceAfterCents })
-        .from(operations)
-        .leftJoin(ledgerEntries, eq(ledgerEntries.operationId, operations.id))
-        .where(eq(operations.idempotencyKey, input.idempotencyKey));
-      if (!existing) throw new NotFoundError('Cash-in operation not found');
-      return { created: false, operation: restore(existing.row, existing.balance) };
+      if (inserted) {
+        return { created: true, operation: toOperation(inserted) };
+      }
+      const [existing] = await this.selectOperationWithBalance(tx).where(
+        eq(operations.idempotencyKey, input.idempotencyKey),
+      );
+      if (!existing) {
+        throw new NotFoundError('Cash-in operation not found');
+      }
+      return { created: false, operation: toOperation(existing.row, existing.balance) };
     });
   }
 
-  async findById(id: string, tx?: Tx): Promise<Operation | null> {
-    const [found] = await (tx ?? this.db)
-      .select({ row: operations, balance: ledgerEntries.balanceAfterCents })
-      .from(operations)
-      .leftJoin(ledgerEntries, eq(ledgerEntries.operationId, operations.id))
-      .where(eq(operations.id, id));
-    return found ? restore(found.row, found.balance) : null;
+  async findById(id: string): Promise<Operation | null> {
+    const [found] = await this.selectOperationWithBalance(this.db).where(eq(operations.id, id));
+    return found ? toOperation(found.row, found.balance) : null;
   }
 
   async markUnknown(id: string): Promise<void> {
+    const isOperation = eq(operations.id, id);
+    const isProcessing = eq(operations.status, OperationStatus.PROCESSING);
     await this.db
       .update(operations)
       .set({ status: OperationStatus.UNKNOWN, updatedAt: sql`now()` })
-      .where(and(eq(operations.id, id), eq(operations.status, OperationStatus.PROCESSING)));
+      .where(and(isOperation, isProcessing));
   }
 
-  async settle(
+  async settle(id: string, outcome: SettleOutcome): Promise<SettleResult> {
+    return this.db.transaction((tx) => this.settleInTransaction(tx, id, outcome));
+  }
+
+  private async settleInTransaction(
+    tx: Tx,
     id: string,
     outcome: SettleOutcome,
-    tx?: Tx,
-  ): Promise<{ applied: boolean; operation: Operation }> {
-    if (!tx) return this.db.transaction((client) => this.settle(id, outcome, client));
-
+  ): Promise<SettleResult> {
+    const isOperation = eq(operations.id, id);
+    const isSettleable = inArray(operations.status, SETTLEABLE_STATUSES);
+    const providerChargeId =
+      outcome.status === OperationStatus.COMPLETED ? outcome.providerChargeId : null;
+    const failureReason = outcome.status === OperationStatus.FAILED ? outcome.reason : null;
     const [changed] = await tx
       .update(operations)
       .set({
         status: outcome.status,
-        providerChargeId:
-          outcome.status === OperationStatus.COMPLETED ? outcome.providerChargeId : null,
-        failureReason: outcome.status === OperationStatus.FAILED ? outcome.reason : null,
+        providerChargeId,
+        failureReason,
         updatedAt: sql`now()`,
       })
-      .where(and(eq(operations.id, id), inArray(operations.status, SETTLEABLE_STATUSES)))
+      .where(and(isOperation, isSettleable))
       .returning();
 
     if (!changed) {
-      const existing = await this.findById(id, tx);
-      if (!existing) throw new NotFoundError('Cash-in operation not found');
-      return { applied: false, operation: existing };
+      const [existing] = await this.selectOperationWithBalance(tx).where(isOperation);
+      if (!existing) {
+        throw new NotFoundError('Cash-in operation not found');
+      }
+      return { applied: false, operation: toOperation(existing.row, existing.balance) };
     }
-
-    if (outcome.status === OperationStatus.FAILED)
-      return { applied: true, operation: restore(changed) };
-
+    if (outcome.status === OperationStatus.FAILED) {
+      return { applied: true, operation: toOperation(changed) };
+    }
     const [wallet] = await tx
       .update(wallets)
       .set({
@@ -108,17 +128,16 @@ export class DrizzleOperationRepository implements OperationRepository {
       })
       .where(eq(wallets.userId, changed.userId))
       .returning({ balance: wallets.balanceCents });
-    if (!wallet) throw new NotFoundError('Wallet not found');
-
-    await tx
-      .insert(ledgerEntries)
-      .values({
-        operationId: id,
-        userId: changed.userId,
-        amountCents: changed.amountCents,
-        balanceAfterCents: wallet.balance,
-      });
-    return { applied: true, operation: restore(changed, wallet.balance) };
+    if (!wallet) {
+      throw new NotFoundError('Wallet not found');
+    }
+    await tx.insert(ledgerEntries).values({
+      operationId: id,
+      userId: changed.userId,
+      amountCents: changed.amountCents,
+      balanceAfterCents: wallet.balance,
+    });
+    return { applied: true, operation: toOperation(changed, wallet.balance) };
   }
 
   async leasePendingBatch(
@@ -126,44 +145,34 @@ export class DrizzleOperationRepository implements OperationRepository {
     leaseMs: number,
     limit: number,
   ): Promise<Operation[]> {
-    // This transaction only reserves rows. It commits before any caller can perform external I/O.
+    const isUnknown = eq(operations.status, OperationStatus.UNKNOWN);
+    const isProcessing = eq(operations.status, OperationStatus.PROCESSING);
+    const isStale = lt(operations.updatedAt, millisecondsAgo(olderThanMs));
+    const isStaleProcessing = and(isProcessing, isStale);
+    const isUnreserved = isNull(operations.reconcileLockedUntil);
+    const isLeaseExpired = lt(operations.reconcileLockedUntil, sql`now()`);
+    const isLeaseFree = or(isUnreserved, isLeaseExpired);
+    const isPending = or(isUnknown, isStaleProcessing);
+
+    // Commit the reservation before returning, without external I/O or changes to updated_at.
     return this.db.transaction(async (tx) => {
       const candidates = tx
         .select({ id: operations.id })
         .from(operations)
-        .where(
-          and(
-            or(
-              eq(operations.status, OperationStatus.UNKNOWN),
-              and(
-                eq(operations.status, OperationStatus.PROCESSING),
-                lt(operations.updatedAt, sql`now() - ${olderThanMs} * interval '1 millisecond'`),
-              ),
-            ),
-            or(
-              isNull(operations.reconcileLockedUntil),
-              lt(operations.reconcileLockedUntil, sql`now()`),
-            ),
-          ),
-        )
+        .where(and(isPending, isLeaseFree))
         .orderBy(operations.updatedAt)
         .limit(limit)
         .for('update', { skipLocked: true });
-
       const reserved = await tx
         .update(operations)
-        .set({
-          reconcileLockedUntil: sql`now() + ${leaseMs} * interval '1 millisecond'`,
-        })
+        .set({ reconcileLockedUntil: millisecondsFromNow(leaseMs) })
         .where(inArray(operations.id, candidates))
         .returning();
-      return reserved.map((row) => restore(row));
+      return reserved.map((row) => toOperation(row));
     });
   }
 
-  async applyWebhookEvent(
-    event: PaymentWebhookEvent,
-  ): ReturnType<OperationRepository['applyWebhookEvent']> {
+  async applyWebhookEvent(event: PaymentWebhookEvent): Promise<ApplyWebhookEventResult> {
     return this.db.transaction(async (tx) => {
       const inserted = await tx
         .insert(webhookEvents)
@@ -176,20 +185,11 @@ export class DrizzleOperationRepository implements OperationRepository {
         })
         .onConflictDoNothing({ target: webhookEvents.eventId })
         .returning({ eventId: webhookEvents.eventId });
-      if (inserted.length === 0) return { duplicate: true };
-
-      let outcome: SettleOutcome;
-      if (event.status === ChargeOutcome.APPROVED) {
-        if (!event.providerChargeId?.trim()) {
-          throw new ValidationError('Missing provider charge ID', [
-            { field: 'provider_charge_id', message: 'Required for an approved payment' },
-          ]);
-        }
-        outcome = { status: OperationStatus.COMPLETED, providerChargeId: event.providerChargeId };
-      } else {
-        outcome = { status: OperationStatus.FAILED, reason: DEFAULT_DECLINE_REASON };
+      if (inserted.length === 0) {
+        return { duplicate: true };
       }
-      const settlement = await this.settle(event.operationId, outcome, tx);
+      const outcome = toSettleOutcome(event);
+      const settlement = await this.settleInTransaction(tx, event.operationId, outcome);
       const result = classifyWebhookResult({
         applied: settlement.applied,
         eventStatus: event.status,
