@@ -1,0 +1,116 @@
+# Tasks: Wallet Cash-In
+
+> Spec 3 de 3. Implementa `design.md` para cumplir `requirements.md`.
+
+## Instrucciones para el agente que implementa
+
+1. Lee `AGENTS.md`, `requirements.md` y `design.md` **antes** de escribir código.
+2. Haz **una tarea a la vez**, en orden. Cada una termina cuando cumple sus criterios de aceptación y pasan `npm run typecheck` y `npm test`.
+3. Haz **un commit por tarea** con el formato `feat(cash-in): T<n> <resumen>`.
+4. **No cambies el spec en silencio.** Si algo del spec es incorrecto, ambiguo o imposible, detente y anótalo en la sección *Dudas del implementador* al final de este archivo en lugar de improvisar.
+5. **Prohibido**:
+   - guardar estado de idempotencia en memoria;
+   - reintentar cobros automáticamente;
+   - leer el saldo, sumar en JS y escribirlo;
+   - con Drizzle: `findFirst` seguido de `insert`/`update` para idempotencia, transiciones o saldo, y llamar a la pasarela dentro de `db.transaction` (design §6.5);
+   - leer `process.env` fuera de `env.ts`.
+6. Marca cada tarea con `[x]` al terminarla.
+
+## Tareas
+
+- [ ] **T1. Infraestructura de base de datos (Drizzle ORM)**: R8, NFR2, NFR3, NFR5
+  - **Ya hecho (no rehacer):**
+    - `docker-compose.yml` con `postgres:17-alpine`, usuario `cashin` y contraseña `cashin_local` definidos directamente en el archivo.
+    - `docker/postgres/init/01-create-test-db.sh`, que crea `cashin_test`.
+    - Scripts `db:up`, `db:down`, `db:reset`, `db:logs` y `db:psql`.
+    - Variables `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` y `DB_NAME` en `.env` y `.env.example`.
+  - **Pendiente:**
+    - Dependencias: `drizzle-orm` y `pg` (+ dev: `drizzle-kit`, `@types/pg`).
+    - `env.ts`: añadir las variables de design §9, entre ellas `DB_*`, con el mismo estilo simple del esquema actual.
+    - `shared/infrastructure/db/client.ts` (`createDb` con `Pool({ host, port, user, password, database })` + `drizzle(pool, { schema })` y tipos `Db` / `Tx`), `shared/infrastructure/db/schema.ts` y `migrate.ts` (migrator de `drizzle-orm`).
+    - `modules/cash-in/infrastructure/persistence/schema.ts` con las 4 tablas de design §3: checks, `unique` e índice parcial incluidos.
+    - `drizzle.config.ts` y la primera migración generada en `drizzle/`. Revisar que el SQL generado coincida con design §3.
+    - Crear `.env.test`, igual que `.env` pero con `DB_NAME=cashin_test` (versionado; ajustar `.gitignore` con `!.env.test`).
+    - Scripts: `db:generate` (`drizzle-kit generate`), `db:migrate` (carga `.env`) y `db:migrate:test` (carga `.env.test`). El script `test` carga `.env.test`.
+  - **Acepta cuando**: `npm run db:up && npm run db:migrate` crea las 4 tablas con sus restricciones (`\d operations` muestra el `UNIQUE` de `idempotency_key` y los `CHECK`), y un test de humo hace `select 1` con Drizzle contra `cashin_test`.
+
+- [ ] **T2. Limpieza y observabilidad**: R1.1, R9
+  - Eliminar el módulo `users` y sus tests.
+  - `app.ts`: montar los módulos en la raíz (sin `/api/v1`).
+  - Logger `pino` en `shared/infrastructure/logging/logger.ts` con el nivel `LOG_LEVEL`.
+  - Middleware `requestId`: usa `X-Request-Id` si viene o genera un UUID, lo devuelve en la respuesta y lo pone a disposición del logger de la request.
+  - **Acepta cuando**: `GET /health` responde con el header `X-Request-Id` (eco si se envía uno), y los logs salen en JSON con `requestId`.
+
+- [ ] **T3. Dominio**: R3, R6.4, R1.3
+  - `OperationStatus.ts` (`canTransition`, `toApiStatus`), `Operation.ts`, `Money.ts` (`toCents`, `fromCents` y rechazo de más de 2 decimales).
+  - Puertos `OperationRepository.ts` y `PaymentProvider.ts` exactamente como en design §5.
+  - **Acepta cuando**: hay tests unitarios de todas las transiciones válidas e inválidas (R3.2, R3.3) y de `Money` (100.00 ↔ 10000, 0.1 + 0.2, 1.005 rechazado).
+
+- [ ] **T4. Repositorio con Drizzle**: R2.1, R2.5, R3.4, R6.1–R6.3, NFR3
+  - `DrizzleOperationRepository`: `claim`, `findById`, `markUnknown`, `settle(…, tx?)`, `withPendingBatch`, `recordWebhookEvent(…, tx?)` según design §6, escritos con las construcciones de design §6.5. Mapea las filas de Drizzle a la entidad `Operation`: el dominio no importa nada de Drizzle.
+  - **Acepta cuando** hay tests de integración que demuestran:
+    - (a) dos `claim` concurrentes con la misma key crean una sola fila;
+    - (b) dos `settle(COMPLETED)` concurrentes acreditan una sola vez;
+    - (c) `settle` sobre una operación final devuelve `applied: false`;
+    - (d) 20 `settle` concurrentes de operaciones distintas del mismo usuario dejan el saldo igual a la suma exacta (R6.3).
+
+- [ ] **T5. Pasarela falsa**: R4
+  - `FakePaymentProvider` según design §8: idempotente por key, `nextOutcome`, `chargeCount`, `setDelay` y el mapeo de `payment_method` para runtime.
+  - Errores `ProviderTimeoutError` y `ProviderUnavailableError`. El timeout lo aplica `CreateCashIn` con `PROVIDER_TIMEOUT_MS` (`AbortSignal.timeout` o `Promise.race`).
+  - **Acepta cuando**: hay tests unitarios del fake, incluido que `timeout_after_charge` deja `getChargeStatus = approved`.
+
+- [ ] **T6. `POST /cash-in`**: R1, R2, R4
+  - `requestHash.ts`, `CashInResponse.ts` (tabla de design §7), `CreateCashIn.ts` (flujo de design §6.1), `CashInController` y la ruta.
+  - Módulo `createCashInModule({ db, provider, ... })` registrado en `main.ts`.
+  - **Acepta cuando** hay tests HTTP de:
+    - éxito: 200 y saldo acreditado;
+    - rechazo: 402 y saldo sin cambios;
+    - timeout: 202 `pending` y operación `UNKNOWN`;
+    - replay de una operación completada: mismo body, `chargeCount = 1`;
+    - misma key con otro payload: 422;
+    - header ausente o inválido: 400;
+    - body inválido: 400.
+
+- [ ] **T7. Concurrencia con varios pods**: R2.1, R2.5
+  - Test con 3 instancias de `createApp()`, cada una con su propio `createDb()` (pool independiente) sobre `cashin_test`, y 10 requests en paralelo con la misma key.
+  - **Acepta cuando**: hay 1 fila en `operations`, 1 en `ledger_entries`, `chargeCount = 1`, y todas las respuestas son 200 con el mismo `operation_id` y `new_balance`, o 202 `pending` con el mismo `operation_id`.
+
+- [ ] **T8. `POST /webhooks/payment`**: R5
+  - `verifySignature.ts` (HMAC-SHA256 del body crudo con `timingSafeEqual`), `HandlePaymentWebhook.ts` (design §6.3), `WebhookController` y la ruta.
+  - **Acepta cuando** hay tests de:
+    - firma inválida: 401;
+    - webhook `approved` sobre una operación `UNKNOWN`: `COMPLETED` y saldo acreditado;
+    - mismo `event_id` dos veces: un solo efecto y `duplicate: true`;
+    - `declined` después de `COMPLETED`: el estado no cambia y queda `result = 'conflict'`;
+    - webhook antes que la respuesta: con `setDelay` en el fake, el webhook liquida durante el cobro; el `/cash-in` responde 200 y hay 1 sola entrada en el ledger;
+    - `operation_id` inexistente: 404.
+
+- [ ] **T9. Reconciliador y resiliencia**: R7, R8
+  - `ReconcileOperations.ts` (design §6.4) y `startReconciler.ts` (al arrancar, con intervalo y parada en el shutdown de `main.ts`).
+  - `errorHandler`: los errores de conexión de `pg` se traducen a 503.
+  - **Acepta cuando** hay tests de:
+    - `timeout_after_charge` seguido de `execute()`: `COMPLETED`;
+    - una operación `PROCESSING` antigua y `not_found`: `FAILED` (simula un reinicio antes de cobrar);
+    - dos `execute()` en paralelo no liquidan dos veces;
+    - una app con un pool apuntando a un puerto cerrado: `POST /cash-in` responde 503.
+
+- [ ] **T10. Documentación**: entregables del README [DOC]
+  - `README.md` con estas secciones:
+    - cómo ejecutar el proyecto;
+    - arquitectura propuesta (con diagrama);
+    - estrategia de idempotencia;
+    - manejo de concurrencia;
+    - estrategia de retry;
+    - manejo de webhooks;
+    - respuesta a la pregunta central;
+    - Redis vs base de datos;
+    - qué cambiaría con 1 millón de operaciones al día;
+    - una sección **"Pilotaje del agente IA"** que enlace a `docs/ai-log.md`.
+  - Actualizar `AGENTS.md` si la estructura cambió.
+  - **Acepta cuando**: un tercero puede clonar el repo, ejecutar `npm run db:up && npm run db:migrate && npm test`, y entender cada decisión.
+
+## Dudas del implementador
+
+> El agente que implementa anota aquí lo que encuentre incorrecto o ambiguo en el spec, con la tarea afectada y qué decidió (o si se detuvo).
+
+- _(vacío)_

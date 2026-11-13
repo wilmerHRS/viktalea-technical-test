@@ -2,6 +2,18 @@
 
 Guía para agentes de IA (y humanos) que trabajen en este repositorio.
 
+## Trabajo guiado por specs
+
+Las features se especifican en `specs/<feature>/` antes de implementarse:
+
+1. `requirements.md`: qué debe pasar (requisitos con ID `R<n>.<m>`).
+2. `design.md`: cómo se construye (modelo de datos, flujos, decisiones).
+3. `tasks.md`: pasos de implementación con criterios de aceptación.
+
+Si te piden implementar una feature que tiene spec: lee los tres archivos, sigue `tasks.md` **una tarea a la vez** y no cambies el spec en silencio. Si algo es incorrecto o ambiguo, anótalo en la sección *Dudas del implementador* de `tasks.md`. Las decisiones y correcciones del pilotaje de IA se registran en `docs/ai-log.md`.
+
+Spec activo: [`specs/cash-in/`](specs/cash-in/) (challenge Wallet Cash-In).
+
 ## Stack
 
 - **Node.js ≥ 20** + **TypeScript** (`strict`, `module: nodenext`) con **ES Modules** (`"type": "module"`).
@@ -21,6 +33,14 @@ Guía para agentes de IA (y humanos) que trabajen en este repositorio.
 | `npm test` | Ejecuta `tests/**/*.test.ts` con `tsx --test` |
 | `npm run build` | Compila `src/` a `dist/` (`tsconfig.build.json`) |
 | `npm start` | Ejecuta `dist/main.js` (requiere `build` previo) |
+| `npm run db:up` | Levanta PostgreSQL 17 (`docker-compose.yml`) y espera a que esté sano |
+| `npm run db:down` | Detiene el contenedor (conserva los datos) |
+| `npm run db:reset` | Borra el volumen y recrea la BD desde cero (vuelve a ejecutar `docker/postgres/init`) |
+| `npm run db:logs` / `npm run db:psql` | Logs del contenedor / consola `psql` dentro del contenedor |
+
+Base de datos local: las credenciales están directamente en `docker-compose.yml` (usuario `cashin`, contraseña `cashin_local`, bases `cashin` y `cashin_test`, puerto 5432). La app se conecta con `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` y `DB_NAME` de `.env`, que deben coincidir con esos valores. Postgres aplica las credenciales **solo al crear el volumen**: si las cambias en el compose, ejecuta `npm run db:reset` (borra los datos) y actualiza `.env`.
+
+Acceso a datos: **Drizzle ORM** (`drizzle-orm` + `pg`, migraciones con `drizzle-kit`). El esquema Drizzle vive en `modules/<module>/infrastructure/persistence/schema.ts`; el dominio nunca importa Drizzle. Usa el query builder por defecto y SQL crudo (`` sql`…` ``, `db.execute`) cuando sea más claro o correcto. Para idempotencia, transiciones de estado y saldo se usan siempre operaciones atómicas en la BD (`onConflictDoNothing`, `UPDATE … WHERE status IN`, `` sql`col + x` ``, `.for('update', { skipLocked: true })`), nunca "leer, comprobar y escribir".
 
 Antes de dar una tarea por terminada: `npm run typecheck && npm test`.
 
