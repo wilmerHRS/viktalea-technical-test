@@ -1,0 +1,110 @@
+# AGENTS.md
+
+Guía para agentes de IA (y humanos) que trabajen en este repositorio.
+
+## Stack
+
+- **Node.js ≥ 20** + **TypeScript** (`strict`, `module: nodenext`) con **ES Modules** (`"type": "module"`).
+  - Los imports relativos se escriben con la extensión real **`.ts`** (`import { User } from './User.ts'`). `tsc` los reescribe a `.js` al compilar a `dist/` (`allowImportingTsExtensions` + `rewriteRelativeImportExtensions`). No uses imports sin extensión ni con `.js`.
+  - `verbatimModuleSyntax` está activo: los imports que solo son tipos van con `import type { ... }` o `type` inline (`import { toUserDto, type UserDto }`).
+- **Express 5**: los errores de los handlers `async` llegan solos al `errorHandler`, así que no hace falta `try/catch` ni `asyncHandler`.
+- `helmet` + `cors` como middlewares de seguridad.
+- **tsx** para desarrollo y tests (ejecuta TS sin compilar); **tsc** solo para typecheck y build a `dist/`.
+- Tests con el runner nativo **`node:test`** + `node:assert/strict` + **supertest**.
+
+## Comandos
+
+| Comando | Qué hace |
+|---|---|
+| `npm run dev` | `tsx watch` sobre `src/main.ts`, carga `.env` si existe |
+| `npm run typecheck` | `tsc --noEmit` sobre `src/` y `tests/` |
+| `npm test` | Ejecuta `tests/**/*.test.ts` con `tsx --test` |
+| `npm run build` | Compila `src/` a `dist/` (`tsconfig.build.json`) |
+| `npm start` | Ejecuta `dist/main.js` (requiere `build` previo) |
+
+Antes de dar una tarea por terminada: `npm run typecheck && npm test`.
+
+Variables de entorno: ver `.env.example` (`NODE_ENV`, `PORT`, `CORS_ORIGIN`). Se leen **solo** en `src/config/env.ts`, que las valida con un esquema **zod** al arrancar. Si alguna es inválida, la app no inicia y muestra cuál falla. El resto del código importa `env` (tipado, p. ej. `env.PORT`). Para añadir una variable: agrégala al `envSchema` (con `.default()` si es opcional), a `.env.example` y a `tests/config/env.test.ts`. Mantén el esquema simple, sin reglas condicionales.
+
+## Arquitectura: Clean Architecture modular
+
+El código se organiza **por módulo de negocio** (feature) y, dentro de cada módulo, **por capa**.
+
+```
+src/
+├── main.ts                    # Entry point: crea los módulos, se los pasa a createApp() y levanta el servidor
+├── app.ts                     # createApp(modules): middlewares globales + monta los módulos recibidos en /api/v1
+├── config/
+│   └── env.ts                 # Única fuente de configuración (process.env), tipada
+├── shared/                    # Código transversal, sin lógica de negocio de un módulo
+│   ├── domain/
+│   │   └── errors/            # AppError, ValidationError, NotFoundError, ConflictError, FieldError
+│   └── infrastructure/
+│       └── http/
+│           ├── HttpModule.ts  # Interface { basePath, router } que expone cada módulo
+│           └── middlewares/   # errorHandler, notFound
+└── modules/
+    └── <module>/              # p. ej. users/
+        ├── index.ts           # Composition root del módulo (inyección de dependencias manual)
+        ├── domain/            # Núcleo: no depende de nada externo
+        │   ├── entities/      # Entidades con invariantes y factorías (User.create / User.restore)
+        │   └── repositories/  # Puertos (interfaces TS) que la infraestructura implementa
+        ├── application/       # Casos de uso: orquestan el dominio
+        │   ├── use-cases/     # Una clase por caso de uso con método execute()
+        │   └── dtos/          # Tipos de entrada/salida + mapeo entidad → DTO
+        └── infrastructure/    # Adaptadores: detalles técnicos intercambiables
+            ├── persistence/   # Implementaciones de los repositorios (InMemory, Postgres, …)
+            └── http/          # Controller + router de Express
+tests/
+└── modules/<module>/          # Tests unitarios (casos de uso) e integración HTTP (supertest)
+dist/                          # Salida de `npm run build` (ignorada por git)
+```
+
+### Regla de dependencias (obligatoria)
+
+Las dependencias apuntan **siempre hacia adentro**:
+
+```
+infrastructure  →  application  →  domain
+```
+
+- `domain/` **no importa** de `application/`, `infrastructure/`, `express` ni ninguna librería de I/O. Solo puede importar de `shared/domain`.
+- `application/` importa de `domain/` y `shared/domain`. **Nunca** de `infrastructure/` ni de `express`. Recibe los repositorios por constructor (tipados contra el puerto del dominio).
+- `infrastructure/` puede importar de todas las capas y de librerías externas.
+- Un módulo **no importa archivos internos de otro módulo**. Si dos módulos necesitan colaborar, se expone un caso de uso/puerto desde el `index.ts` del módulo proveedor y se inyecta en el composition root.
+- `shared/` no importa nada de `modules/`.
+
+### Convenciones
+
+- **Nombres de archivo**: clases e interfaces en `PascalCase.ts` (`CreateUser.ts`, `UserRepository.ts`); funciones/fábricas en `camelCase.ts` (`userRoutes.ts`, `errorHandler.ts`).
+- **Tipado**: nada de `any`; para datos externos sin validar usa `unknown` y valida en la entidad. Tipa explícitamente los retornos de funciones públicas. Los puertos son `interface` y los adaptadores usan `implements`.
+- **Casos de uso**: una clase por caso, constructor con objeto de dependencias tipado `{ userRepository, ... }` (campos `private readonly`), único método público `async execute(input): Promise<Dto>`. Devuelven DTOs, nunca entidades.
+- **Entidades**: constructor `private`; `static create(...)` valida invariantes y lanza `ValidationError` con `details: FieldError[]`; `static restore(...)` rehidrata desde persistencia sin validar. Propiedades `readonly`.
+- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). El `errorHandler` las traduce a HTTP. No construir respuestas de error a mano en los controllers.
+- **Controllers**: delgados. Solo extraen datos del `req`, llaman al caso de uso y responden. Métodos como arrow functions de instancia (para poder pasarlos al router sin `bind`).
+- **Formato de respuesta**:
+  - Éxito: `{ "data": ... }`
+  - Error: `{ "error": { "code": "VALIDATION_ERROR", "message": "...", "details": [...] } }`
+- **Rutas**: todos los módulos se montan bajo `/api/v1/<basePath>`. `/health` queda fuera del prefijo.
+- **IDs**: `crypto.randomUUID()` inyectado como `idGenerator` para poder fijarlo en tests.
+- **Config**: no leer `process.env` fuera de `src/config/env.ts`.
+
+### Testing
+
+- Casos de uso: tests unitarios instanciando el caso de uso con un repositorio en memoria o un fake.
+- HTTP: `createApp([create<Module>Module({ <dep>: fake })])` + supertest. No levantar el servidor real (`main.ts`).
+- Cada test crea su propia instancia de app/repositorio (sin estado compartido entre tests).
+
+## Cómo añadir un módulo nuevo
+
+Usar la skill **`/new-module`** (`.claude/skills/new-module/SKILL.md`) o seguir estos pasos:
+
+1. Crear `src/modules/<module>/` con las carpetas `domain/`, `application/`, `infrastructure/`.
+2. Definir entidad(es) y puerto(s) de repositorio (`interface`) en `domain/`.
+3. Implementar casos de uso en `application/use-cases/` + tipos/DTO en `application/dtos/`.
+4. Implementar adaptadores en `infrastructure/persistence/` e `infrastructure/http/` (controller + router).
+5. Cablear todo en `src/modules/<module>/index.ts` exportando `create<Module>Module(overrides): HttpModule` y su tipo `<Module>ModuleOverrides`.
+6. Registrar el módulo en la lista que `src/main.ts` pasa a `createApp([...])`.
+7. Añadir tests en `tests/modules/<module>/` y ejecutar `npm run typecheck && npm test`.
+
+El módulo `users` es la implementación de referencia: cópialo como plantilla.
