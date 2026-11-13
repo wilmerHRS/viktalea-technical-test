@@ -55,6 +55,29 @@
     - (d) 20 `settle` concurrentes de operaciones distintas del mismo usuario dejan el saldo igual a la suma exacta (R6.3);
     - (e) dos `leasePendingBatch` concurrentes nunca devuelven la misma operación, y una operación con la reserva vencida vuelve a poder reservarse (R7.3).
 
+- [ ] **T4.1. Correcciones de la revisión de T1–T4** (hacer antes de T5): R8, R5.3, R5.4, design §2, §2.1, §5, §6.3
+  > Origen: revisión humana y del agente A sobre T1–T4 (ver `docs/ai-log.md`, Fase 2). Cada punto se corrige **sin cambiar el comportamiento** que ya cubren los tests de T1–T4; los tests existentes deben seguir pasando, adaptando solo los imports y los nombres.
+  1. **🔴 Pool sin manejador de errores (R8).** En `createDb`, registrar `pool.on('error', …)` que registre el error con el logger y **no** tumbe el proceso. Test: terminar una conexión inactiva del pool con `pg_terminate_backend` desde otra sesión; el proceso sigue vivo y la siguiente consulta funciona. Antes de este arreglo, esto mataba el proceso con `Unhandled 'error' event` (código `57P01`).
+  2. **Estructura de `domain/` (design §2).** Mover a `entities/Operation.ts`, `value-objects/{OperationStatus,Money,Currency,WebhookEventResult}.ts`, `repositories/OperationRepository.ts` y `gateways/PaymentProvider.ts`. Actualizar los imports.
+  3. **Constantes y "enums" (design §2.1).** Eliminar los literales repetidos:
+     - Estados: `'PROCESSING'`/`'UNKNOWN'`/… en el repositorio y el esquema se reemplazan por `OperationStatus.*` y por `SETTLEABLE_STATUSES` derivado de la tabla de transiciones.
+     - Moneda: `'PEN'` en `Operation.create` y en el default del esquema se reemplaza por `Currency.PEN`.
+     - Resultados de webhook y de la pasarela: `WebhookEventResult`, `ChargeOutcome` y `ProviderChargeStatus` como objetos `as const`.
+     - Números: `CENTS_PER_UNIT` en `Money`, `DB_CONNECTION_TIMEOUT_MS` en `client.ts` y códigos HTTP vía `HttpStatus`.
+     - `CHECK` e índice parcial del esquema construidos desde las constantes. `npm run db:generate` **no debe producir una migración nueva**: el SQL resultante es idéntico al actual.
+     - Patrón `as const` + tipo derivado. **No** usar `enum` de TypeScript ni un `constants.ts` global.
+  4. **Errores de dominio sin HTTP (design §2.1.5).** Quitar `statusCode` de `AppError` y sus subclases. Crear `shared/infrastructure/http/httpStatus.ts` y `errorStatusMap.ts` (código → HttpStatus), y usarlos en `errorHandler` y `notFound`. Las respuestas HTTP actuales no cambian.
+  5. **Entidad sin detalles de infraestructura.** Quitar `reconcileLockedUntil` de `Operation`: el lease lo gestiona solo el adaptador. El test (e) verifica la reserva consultando la tabla.
+  6. **Puerto del webhook atómico (design §5, §6.3).** Reemplazar `recordWebhookEvent` por `applyWebhookEvent(event)`, que en una sola transacción del adaptador hace: insertar el evento deduplicando, liquidar con `settle` y guardar el resultado de `classifyWebhookResult()`. Quitar `tx` de la firma del puerto (el adaptador puede seguir usándolo internamente). Tests:
+     - unitarios de `classifyWebhookResult`: `applied`, `ignored` (coincide con el final) y `conflict` (lo contradice);
+     - integración: evento duplicado entre dos pools, un solo efecto y `duplicate: true` en el segundo;
+     - integración: si falla a mitad de la transacción, no queda ni el evento ni el efecto;
+     - integración: `declined` sobre una operación `COMPLETED` queda como `conflict` sin cambiar el estado.
+  7. **Menores:**
+     - El comentario de cabecera de `.env.test` dice "NO se sube a git", pero sí se versiona: corregirlo.
+     - `X-Request-Id` entrante: aceptarlo solo si cumple `^[A-Za-z0-9._-]{1,128}$`; si no, generar un UUID nuevo. Añadir un test.
+  - **Acepta cuando**: `npm run typecheck` y `npm test` pasan; el grep `grep -rnE "'(PROCESSING|UNKNOWN|COMPLETED|FAILED|PEN|applied|ignored|conflict)'" src` solo encuentra las **definiciones** de las constantes; `domain/` no importa nada de `infrastructure/`, de Drizzle ni de Express; y `npm run db:generate` informa que no hay cambios.
+
 - [ ] **T5. Pasarela falsa**: R4
   - `FakePaymentProvider` según design §8: idempotente por key, `nextOutcome`, `chargeCount`, `setDelay` y el mapeo de `payment_method` para runtime.
   - Errores `ProviderTimeoutError` y `ProviderUnavailableError`. El timeout lo aplica `CreateCashIn` con `PROVIDER_TIMEOUT_MS` (`AbortSignal.timeout` o `Promise.race`).
@@ -77,12 +100,12 @@
   - **Acepta cuando**: hay 1 fila en `operations`, 1 en `ledger_entries`, `chargeCount = 1`, y todas las respuestas son 200 con el mismo `operation_id` y `new_balance`, o 202 `pending` con el mismo `operation_id`.
 
 - [ ] **T8. `POST /webhooks/payment`**: R5
-  - `verifySignature.ts` (HMAC-SHA256 del body crudo con `timingSafeEqual`), `HandlePaymentWebhook.ts` (design §6.3), `WebhookController` y la ruta.
+  - `verifySignature.ts` (HMAC-SHA256 del body crudo con `timingSafeEqual`), `HandlePaymentWebhook.ts` (design §6.3, usando `repo.applyWebhookEvent` de T4.1, sin abrir transacciones en la capa de aplicación), `WebhookController` y la ruta.
   - **Acepta cuando** hay tests de:
     - firma inválida: 401;
     - webhook `approved` sobre una operación `UNKNOWN`: `COMPLETED` y saldo acreditado;
     - mismo `event_id` dos veces: un solo efecto y `duplicate: true`;
-    - `declined` después de `COMPLETED`: el estado no cambia y queda `result = 'conflict'`;
+    - `declined` después de `COMPLETED`: el estado no cambia, queda `result = WebhookEventResult.CONFLICT` y se emite un log `warn`;
     - webhook antes que la respuesta: con `setDelay` en el fake, el webhook liquida durante el cobro; el `/cash-in` responde 200 y hay 1 sola entrada en el ledger;
     - `operation_id` inexistente: 404.
 

@@ -31,18 +31,27 @@ src/
 │       │   ├── schema.ts           # re-exporta los esquemas Drizzle de todos los módulos (lo usan drizzle-kit y client)
 │       │   └── migrate.ts          # aplica las migraciones de /drizzle con el migrator de drizzle-orm (npm run db:migrate)
 │       ├── logging/logger.ts       # pino
-│       └── http/middlewares/
-│           ├── requestId.ts        # X-Request-Id (R9.1)
-│           ├── errorHandler.ts     # + mapea errores de conexión a BD a 503 (R8.1)
-│           └── notFound.ts
+│       └── http/
+│           ├── httpStatus.ts       # HttpStatus (constantes de códigos HTTP)
+│           ├── errorStatusMap.ts   # código de error de dominio → HttpStatus (los errores de dominio no conocen HTTP)
+│           └── middlewares/
+│               ├── requestId.ts    # X-Request-Id (R9.1)
+│               ├── errorHandler.ts # usa errorStatusMap + mapea errores de conexión a BD a 503 (R8.1)
+│               └── notFound.ts
 └── modules/cash-in/
     ├── index.ts                    # createCashInModule({ db, provider, webhookSecret, ... }): HttpModule
-    ├── domain/
-    │   ├── OperationStatus.ts      # enum + canTransition() + toApiStatus()
-    │   ├── Operation.ts            # entidad
-    │   ├── Money.ts                # toCents() / fromCents() + validación de 2 decimales
-    │   ├── OperationRepository.ts  # puerto
-    │   └── PaymentProvider.ts      # puerto
+    ├── domain/                     # SOLO conceptos de negocio: sin HTTP, sin SQL, sin Drizzle, sin detalles de infraestructura
+    │   ├── entities/
+    │   │   └── Operation.ts        # entidad (sin campos de infraestructura como el lease del reconciliador)
+    │   ├── value-objects/
+    │   │   ├── OperationStatus.ts  # "enum" + tabla de transiciones + SETTLEABLE_STATUSES / FINAL_STATUSES + toApiStatus()
+    │   │   ├── Money.ts            # CENTS_PER_UNIT, toCents(), fromCents()
+    │   │   ├── Currency.ts         # "enum" Currency (PEN) + SUPPORTED_CURRENCIES
+    │   │   └── WebhookEventResult.ts # "enum" + classifyWebhookResult() (regla de R5.4, función pura)
+    │   ├── repositories/
+    │   │   └── OperationRepository.ts # puerto de persistencia (tipos de dominio, sin `tx`)
+    │   └── gateways/
+    │       └── PaymentProvider.ts  # puerto hacia el sistema externo + "enums" ChargeOutcome / ProviderChargeStatus
     ├── application/
     │   ├── CreateCashIn.ts         # flujo de R1/R2/R4
     │   ├── HandlePaymentWebhook.ts # flujo de R5
@@ -64,7 +73,21 @@ Decisiones:
 - **Drizzle ORM** [decisión humana]: se integra para demostrar su uso (esquema tipado, migraciones, cliente, transacciones y query builder), y se recurre a SQL crudo con `` sql`…` `` donde sea mejor opción. Las garantías de concurrencia se escriben de forma explícita (§6). El esquema Drizzle vive en la **infraestructura** del módulo: el dominio no conoce el ORM, y el repositorio mapea filas a entidades.
 - **Migraciones**: `drizzle-kit generate` crea el SQL a partir de `schema.ts`, y el SQL generado se revisa y se versiona. Para aplicarlas, `src/shared/infrastructure/db/migrate.ts` usa `migrate()` de `drizzle-orm/node-postgres/migrator`. Así se aplican con la misma configuración validada de `env.ts`, sin que `drizzle-kit` necesite conectarse.
 - **El módulo `users` se elimina**: era solo un ejemplo.
+- **Estructura de `domain/`** [decisión humana, revisión de T1–T4]: se separa por tipo de concepto (`entities/`, `value-objects/`, `repositories/`, `gateways/`), igual que la convención de `AGENTS.md`. La primera versión de este spec lo dejaba plano y mezclaba entidades, reglas y puertos.
 - **Las wallets viven dentro del módulo `cash-in`**. Acreditar exige una transacción que abarca operación, ledger y wallet. Partirlo en dos módulos obligaría a una transacción entre módulos o a una saga, algo injustificado para este alcance. Si el dominio de wallet crece, se extrae a su propio módulo con un puerto `WalletLedger` que acepte una transacción.
+
+### 2.1 Constantes, "enums" y valores en duro [decisión humana, revisión de T1–T4]
+
+1. **Ningún literal de negocio repetido.** Estados, monedas, resultados de webhook, resultados de la pasarela, prefijos de IDs, tamaños de lote, códigos HTTP y tiempos se definen **una vez** como constante con nombre y se importan. Esto incluye el esquema de Drizzle: los `CHECK` y el índice parcial se construyen a partir de las constantes (por ejemplo, `sqlInList(Object.values(OperationStatus))`), no con strings copiados.
+2. **Patrón de "enum": objeto `as const` más un tipo derivado.** No se usa `enum` de TypeScript:
+   ```ts
+   export const OperationStatus = { PROCESSING: 'PROCESSING', UNKNOWN: 'UNKNOWN', COMPLETED: 'COMPLETED', FAILED: 'FAILED' } as const;
+   export type OperationStatus = (typeof OperationStatus)[keyof typeof OperationStatus];
+   ```
+   Motivos: es JavaScript puro (compatible con el *type stripping* nativo de Node y con `erasableSyntaxOnly`, que no admiten `enum`), no tiene las rarezas de `enum` (mapeo inverso en los numéricos, tipado nominal), sus valores son strings legibles en la BD y en los logs, y permite derivar listas (`Object.values`) para los `CHECK` y las validaciones.
+3. **Sin un archivo global de constantes.** Cada constante vive junto al concepto al que pertenece: las de dominio en `domain/value-objects`, las de un puerto en su puerto, las de HTTP en `shared/infrastructure/http/httpStatus.ts` y las de configuración en `env.ts`. Un `constants.ts` global acopla módulos que no tienen relación y termina siendo un cajón de sastre.
+4. **Las reglas derivadas salen de su fuente.** La lista de estados liquidables (`SETTLEABLE_STATUSES = ['PROCESSING','UNKNOWN']`) se deriva de la tabla de transiciones de `OperationStatus`, y el repositorio la usa en su `WHERE status IN (…)`. Así la máquina de estados del dominio y el SQL no pueden divergir.
+5. **Los errores de dominio no conocen HTTP.** `AppError` y sus subclases llevan un `code` (`VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, …) pero **no** un `statusCode`. La traducción a HTTP la hace `shared/infrastructure/http/errorStatusMap.ts` en el `errorHandler`.
 
 ## 3. Modelo de datos
 
@@ -131,24 +154,26 @@ CREATE TABLE webhook_events (
    └──────────────▶ FAILED ◀────┘ (final)
 ```
 
-`OperationStatus.ts` exporta `canTransition(from, to)` y la tabla de transiciones. En la base de datos, cada transición es un `UPDATE … WHERE id = $1 AND status = ANY($allowedFrom)`. Si devuelve 0 filas, otra vía ganó y se trata como no-op (R3.4).
+`OperationStatus.ts` exporta `canTransition(from, to)`, la tabla de transiciones y las listas derivadas `SETTLEABLE_STATUSES` (estados desde los que se puede llegar a uno final) y `FINAL_STATUSES`. En la base de datos, cada transición es un `UPDATE … WHERE id = $1 AND status = ANY($allowedFrom)`, donde `$allowedFrom` **sale de esas listas** (§2.1.4). Si devuelve 0 filas, otra vía ganó y se trata como no-op (R3.4).
 
 ## 5. Puertos
 
 ```ts
-// domain/PaymentProvider.ts
+// domain/gateways/PaymentProvider.ts
+export const ChargeOutcome = { APPROVED: 'approved', DECLINED: 'declined' } as const;
+export const ProviderChargeStatus = { APPROVED: 'approved', DECLINED: 'declined', PENDING: 'pending', NOT_FOUND: 'not_found' } as const;
+// + tipos derivados ChargeOutcome / ProviderChargeStatus (§2.1.2)
 export type ChargeResult =
-  | { outcome: 'approved'; providerChargeId: string }
-  | { outcome: 'declined'; reason: string };
-export type ChargeStatus = 'approved' | 'declined' | 'pending' | 'not_found';
+  | { outcome: typeof ChargeOutcome.APPROVED; providerChargeId: string }
+  | { outcome: typeof ChargeOutcome.DECLINED; reason: string };
 
 export interface PaymentProvider {
   /** idempotencyKey = operation.id (R4.1). Lanza ProviderTimeoutError / ProviderUnavailableError. */
-  charge(req: { idempotencyKey: string; amountCents: number; currency: string; paymentMethod: string }): Promise<ChargeResult>;
-  getChargeStatus(idempotencyKey: string): Promise<{ status: ChargeStatus; providerChargeId?: string; reason?: string }>;
+  charge(req: { idempotencyKey: string; amountCents: number; currency: Currency; paymentMethod: string }): Promise<ChargeResult>;
+  getChargeStatus(idempotencyKey: string): Promise<{ status: ProviderChargeStatus; providerChargeId?: string; reason?: string }>;
 }
 
-// domain/OperationRepository.ts
+// domain/repositories/OperationRepository.ts   (tipos de dominio únicamente: sin `tx`, sin tipos de Drizzle)
 export interface OperationRepository {
   /** INSERT ON CONFLICT DO NOTHING. created=false → ya existía (devuelve la existente). */
   claim(input: NewOperation): Promise<{ created: boolean; operation: Operation }>;
@@ -156,19 +181,31 @@ export interface OperationRepository {
   markUnknown(id: string): Promise<void>;                      // PROCESSING → UNKNOWN (condicional)
   settle(id: string, outcome: SettleOutcome): Promise<{ applied: boolean; operation: Operation }>;
   /**
-   * Para el reconciliador (§6.4): reserva hasta `limit` operaciones pendientes y sin reserva vigente,
-   * marcando reconcile_locked_until = now() + leaseMs, en UNA transacción corta que se confirma antes de devolver.
-   * El llamador consulta la pasarela FUERA de cualquier transacción.
+   * Para el reconciliador (§6.4): reserva hasta `limit` operaciones pendientes y sin reserva vigente
+   * en UNA transacción corta que se confirma antes de devolver. El lease es un detalle del adaptador:
+   * no aparece en la entidad. El llamador consulta la pasarela FUERA de cualquier transacción.
    */
   leasePendingBatch(olderThanMs: number, leaseMs: number, limit: number): Promise<Operation[]>;
-  recordWebhookEvent(e: WebhookEventInput): Promise<{ duplicate: boolean }>;
+  /**
+   * Webhook (§6.3) en UNA transacción: deduplica por eventId, liquida con settle y guarda
+   * el resultado clasificado con classifyWebhookResult(). Atómico: o queda todo o nada.
+   */
+  applyWebhookEvent(event: PaymentWebhookEvent): Promise<
+    | { duplicate: true }
+    | { duplicate: false; result: WebhookEventResult; operation: Operation }
+  >;
 }
 export type SettleOutcome =
-  | { status: 'COMPLETED'; providerChargeId: string }
-  | { status: 'FAILED'; reason: string };
+  | { status: typeof OperationStatus.COMPLETED; providerChargeId: string }
+  | { status: typeof OperationStatus.FAILED; reason: string };
+export interface PaymentWebhookEvent {
+  eventId: string; operationId: string; status: ChargeOutcome; providerChargeId?: string; payload: unknown;
+}
 ```
 
-`Operation` incluye `newBalanceCents: number | null`, que se obtiene con un `LEFT JOIN ledger_entries`.
+- `Operation` incluye `newBalanceCents: number | null`, que se obtiene con un `LEFT JOIN ledger_entries`. **No** incluye `reconcileLockedUntil`, porque es un detalle de persistencia del reconciliador.
+- El adaptador puede usar internamente un `tx` (por ejemplo `settle` lo reutiliza dentro de `applyWebhookEvent`), pero el puerto no lo expone.
+- `recordWebhookEvent` desaparece del puerto: la deduplicación solo tiene sentido junto con el efecto, dentro de `applyWebhookEvent`.
 
 ## 6. Flujos
 
@@ -223,19 +260,21 @@ El `UPDATE … WHERE status IN (…)` toma un lock de fila sobre la operación. 
    (express.json({ verify }) guarda req.rawBody)
 2. Validar body → si falla, 400
 3. op = repo.findById(operation_id) → si no existe, 404 (R5.6)
-4. En UNA transacción (la deduplicación y el efecto son atómicos):
+4. r = repo.applyWebhookEvent(event)      ── dentro del adaptador, en UNA transacción:
      INSERT INTO webhook_events(..., result='ignored') ON CONFLICT (event_id) DO NOTHING RETURNING event_id
-       sin fila → duplicado: COMMIT y responder 200 { received: true, duplicate: true }   (R5.3)
-     r = settle(op.id, approved ? COMPLETED : FAILED, tx)
-     result = r.applied                          → 'applied'
-              no aplicado y coincide con el final → 'ignored'
-              no aplicado y lo contradice         → 'conflict' + log warn   (R5.4)
+       sin fila → COMMIT, return { duplicate: true }                                     (R5.3)
+     s = settle(op.id, approved ? COMPLETED : FAILED)   (con el mismo tx, interno al adaptador)
+     result = classifyWebhookResult({ applied: s.applied, eventStatus, finalStatus: s.operation.status })
+              → APPLIED | IGNORED (coincide con el final) | CONFLICT (lo contradice)      (R5.4)
      UPDATE webhook_events SET result = $result WHERE event_id = $e
    COMMIT
-5. 200 { received: true }
+5. duplicate → 200 { received: true, duplicate: true }
+   CONFLICT  → log warn con operationId, eventId y los dos estados; 200 { received: true }
+   otro      → 200 { received: true }
 ```
 
-Por eso `settle` y `recordWebhookEvent` aceptan un cliente de transacción opcional (`tx?`). Si la transacción falla, no queda ni el evento ni el efecto, y la pasarela reintenta el webhook (R5.7).
+- `classifyWebhookResult()` es una **función pura de dominio** (`value-objects/WebhookEventResult.ts`) que se testea sin BD. El adaptador solo la invoca.
+- La transacción vive en el adaptador, así el puerto no filtra `tx` ni tipos de Drizzle al dominio. Si falla, no queda ni el evento ni el efecto, y la pasarela reintenta el webhook (R5.7).
 
 ### 6.4 Reconciliador (R7)
 
@@ -282,7 +321,8 @@ Se usa el query builder por defecto. Si una consulta queda más clara o más cor
 | Incremento atómico del saldo (R6.3) | `` tx.update(wallets).set({ balanceCents: sql`${wallets.balanceCents} + ${amount}` }).where(eq(wallets.userId, userId)).returning() `` |
 | Deduplicar el webhook (R5.3) | `tx.insert(webhookEvents).values(e).onConflictDoNothing({ target: webhookEvents.eventId }).returning()` |
 | Reserva del lote del reconciliador (R7.3) | `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED) RETURNING *` de §6.4. Es un buen candidato para SQL crudo (`` db.execute(sql`…`) ``); con el builder, la subconsulta usa `.for('update', { skipLocked: true })`. |
-| Transacción (R6.1) | `db.transaction(async (tx) => { … })`. Los métodos del repositorio aceptan `tx?: Tx` y usan `tx ?? db`. |
+| Transacción (R6.1) | `db.transaction(async (tx) => { … })`. Dentro del adaptador, los métodos privados o internos pueden recibir `tx?: Tx` y usar `tx ?? db`; el puerto de dominio nunca lo expone (§5). |
+| Lista de estados en SQL | Siempre desde las constantes: `inArray(operations.status, [...SETTLEABLE_STATUSES])`, `eq(operations.status, OperationStatus.PROCESSING)`; nunca `'PROCESSING'` escrito a mano (§2.1). |
 
 **Prohibido** en idempotencia, transiciones y saldo, se use el builder o SQL crudo:
 - `db.query.x.findFirst()` seguido de `insert`/`update` (condición de carrera entre pods);

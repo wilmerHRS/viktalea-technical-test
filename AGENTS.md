@@ -66,9 +66,11 @@ src/
 └── modules/
     └── <module>/              # p. ej. users/
         ├── index.ts           # Composition root del módulo (inyección de dependencias manual)
-        ├── domain/            # Núcleo: no depende de nada externo
-        │   ├── entities/      # Entidades con invariantes y factorías (User.create / User.restore)
-        │   └── repositories/  # Puertos (interfaces TS) que la infraestructura implementa
+        ├── domain/            # Núcleo: SOLO conceptos de negocio (sin HTTP, SQL, ORM ni detalles de infraestructura)
+        │   ├── entities/      # Entidades con invariantes y factorías (Entity.create / Entity.restore)
+        │   ├── value-objects/ # Valores y reglas puras: "enums" as const, máquina de estados, Money…
+        │   ├── repositories/  # Puertos de persistencia (interfaces TS) que la infraestructura implementa
+        │   └── gateways/      # Puertos hacia sistemas externos (p. ej. la pasarela de pagos)
         ├── application/       # Casos de uso: orquestan el dominio
         │   ├── use-cases/     # Una clase por caso de uso con método execute()
         │   └── dtos/          # Tipos de entrada/salida + mapeo entidad → DTO
@@ -100,7 +102,13 @@ infrastructure  →  application  →  domain
 - **Tipado**: nada de `any`; para datos externos sin validar usa `unknown` y valida en la entidad. Tipa explícitamente los retornos de funciones públicas. Los puertos son `interface` y los adaptadores usan `implements`.
 - **Casos de uso**: una clase por caso, constructor con objeto de dependencias tipado `{ userRepository, ... }` (campos `private readonly`), único método público `async execute(input): Promise<Dto>`. Devuelven DTOs, nunca entidades.
 - **Entidades**: constructor `private`; `static create(...)` valida invariantes y lanza `ValidationError` con `details: FieldError[]`; `static restore(...)` rehidrata desde persistencia sin validar. Propiedades `readonly`.
-- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). El `errorHandler` las traduce a HTTP. No construir respuestas de error a mano en los controllers.
+- **Errores**: lanzar subclases de `AppError` (en `shared/domain/errors`). Llevan un `code`, **no** un código HTTP: el `errorHandler` traduce `code` → HTTP con `shared/infrastructure/http/errorStatusMap.ts`. No construir respuestas de error a mano en los controllers.
+- **Constantes y "enums"**: ningún literal de negocio repetido (estados, monedas, resultados, prefijos, tamaños de lote, códigos HTTP, tiempos). Se define una vez como constante con nombre, **junto al concepto que describe** (no en un `constants.ts` global), y se importa. Para conjuntos cerrados se usa un objeto `as const` más un tipo derivado, no `enum` de TypeScript:
+  ```ts
+  export const Currency = { PEN: 'PEN' } as const;
+  export type Currency = (typeof Currency)[keyof typeof Currency];
+  ```
+  Las listas derivadas (p. ej. los estados liquidables) se calculan desde su fuente, y el SQL y los `CHECK` del esquema se construyen a partir de las constantes.
 - **Controllers**: delgados. Solo extraen datos del `req`, llaman al caso de uso y responden. Métodos como arrow functions de instancia (para poder pasarlos al router sin `bind`).
 - **Formato de respuesta**:
   - Éxito: `{ "data": ... }`
@@ -120,7 +128,7 @@ infrastructure  →  application  →  domain
 Usar la skill **`/new-module`** (`.claude/skills/new-module/SKILL.md`) o seguir estos pasos:
 
 1. Crear `src/modules/<module>/` con las carpetas `domain/`, `application/`, `infrastructure/`.
-2. Definir entidad(es) y puerto(s) de repositorio (`interface`) en `domain/`.
+2. Definir en `domain/` las entidades (`entities/`), los value objects y "enums" (`value-objects/`), los puertos de persistencia (`repositories/`) y, si hay sistemas externos, sus puertos (`gateways/`).
 3. Implementar casos de uso en `application/use-cases/` + tipos/DTO en `application/dtos/`.
 4. Implementar adaptadores en `infrastructure/persistence/` e `infrastructure/http/` (controller + router).
 5. Cablear todo en `src/modules/<module>/index.ts` exportando `create<Module>Module(overrides): HttpModule` y su tipo `<Module>ModuleOverrides`.
