@@ -61,3 +61,16 @@ it('replaces invalid or overlong incoming request IDs with a UUID', async () => 
     );
   }
 });
+
+it('expone por CORS los headers que un cliente web necesita leer (Retry-After, X-Request-Id)', async () => {
+  const app = createApp([]);
+
+  const response = await request(app)
+    .get('/health')
+    .set('Origin', 'http://localhost:5173')
+    .expect(200);
+
+  const exposed = response.headers['access-control-expose-headers'] ?? '';
+  assert.match(exposed, /Retry-After/);
+  assert.match(exposed, /X-Request-Id/);
+});
