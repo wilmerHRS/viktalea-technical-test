@@ -6,6 +6,7 @@ import { ClaimOperation } from './application/use-cases/claim-operation.use-case
 import { CreateCashIn } from './application/use-cases/create-cash-in.use-case.ts';
 import { HandlePaymentWebhook } from './application/use-cases/handle-payment-webhook.use-case.ts';
 import { MarkOperationUnknown } from './application/use-cases/mark-operation-unknown.use-case.ts';
+import { ReconcileOperations } from './application/use-cases/reconcile-operations.use-case.ts';
 import { SettleOperation } from './application/use-cases/settle-operation.use-case.ts';
 import type { PaymentProvider } from './domain/gateways/payment-provider.gateway.ts';
 import { CashInController } from './infrastructure/http/cash-in.controller.ts';
@@ -46,4 +47,31 @@ export const createCashInModule = (dependencies: CashInModuleDependencies): Http
   });
 
   return { basePath: ROOT_PATH, router };
+};
+
+export interface CashInReconcilerDependencies {
+  db: Db;
+  paymentProvider: PaymentProvider;
+  providerTimeoutMs: number;
+  staleAfterMs: number;
+  leaseMs: number;
+  logger: Logger;
+}
+
+/** Caso de uso del reconciliador (R7). Lo ejecuta periódicamente `startReconcilerJob`. */
+export const createCashInReconciler = (
+  dependencies: CashInReconcilerDependencies,
+): ReconcileOperations => {
+  const unitOfWork = new DrizzleUnitOfWork(dependencies.db);
+  return new ReconcileOperations({
+    unitOfWork,
+    settleOperation: new SettleOperation({ unitOfWork }),
+    paymentProvider: dependencies.paymentProvider,
+    settings: {
+      staleAfterMs: dependencies.staleAfterMs,
+      leaseMs: dependencies.leaseMs,
+      providerTimeoutMs: dependencies.providerTimeoutMs,
+    },
+    logger: dependencies.logger,
+  });
 };

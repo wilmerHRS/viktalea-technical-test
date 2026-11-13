@@ -52,16 +52,28 @@ const CHARGE_ID_PREFIX = 'ch_';
 export class FakePaymentProvider implements PaymentProvider {
   private readonly charges = new Map<string, ChargeResult>();
   private readonly callsByKey = new Map<string, number>();
+  private readonly statusChecksByKey = new Map<string, number>();
   private delayMs = 0;
+  private statusDelayMs = 0;
 
   /** Retraso antes de responder a `charge` (para simular que el webhook llega antes). */
   setDelay(delayMs: number): void {
     this.delayMs = delayMs;
   }
 
+  /** Retraso antes de responder a `getChargeStatus` (para simular una consulta lenta). */
+  setStatusDelay(delayMs: number): void {
+    this.statusDelayMs = delayMs;
+  }
+
   /** Cuántas veces se llamó a `charge` con esta key. */
   chargeCalls(idempotencyKey: string): number {
     return this.callsByKey.get(idempotencyKey) ?? 0;
+  }
+
+  /** Cuántas veces se consultó el estado del cobro de esta key. */
+  statusChecks(idempotencyKey: string): number {
+    return this.statusChecksByKey.get(idempotencyKey) ?? 0;
   }
 
   async charge(request: ChargeRequest): Promise<ChargeResult> {
@@ -97,6 +109,10 @@ export class FakePaymentProvider implements PaymentProvider {
   }
 
   async getChargeStatus(idempotencyKey: string): Promise<ChargeStatusResult> {
+    this.statusChecksByKey.set(idempotencyKey, this.statusChecks(idempotencyKey) + 1);
+    if (this.statusDelayMs > 0) {
+      await sleep(this.statusDelayMs);
+    }
     const charge = this.charges.get(idempotencyKey);
     if (!charge) {
       return { status: ProviderChargeStatus.NOT_FOUND };

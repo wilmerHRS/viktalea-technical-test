@@ -143,7 +143,7 @@
     - webhook antes que la respuesta: con `setDelay` en el fake, el webhook liquida durante el cobro; el `/cash-in` responde 200 y hay 1 sola entrada en el ledger;
     - `operation_id` inexistente: 404.
 
-- [ ] **T9. Reconciliador y resiliencia**: R7, R8 — **parcial**: el 503 con BD caída ya está (A); falta el reconciliador
+- [x] **T9. Reconciliador y resiliencia**: R7, R8 — hecha por A (`reconcile-operations.use-case.ts`, `reconciler.job.ts`, `reconcile.integration.test.ts`)
   - `ReconcileOperations.ts` con las tres fases de design §6.4:
     1. reservar con `unitOfWork.run(r => r.operations.leasePendingBatch(criteria))`, que se confirma al salir;
     2. consultar la pasarela fuera de cualquier `run`;
@@ -157,7 +157,7 @@
     - durante `getChargeStatus()` no hay ninguna transacción abierta (por ejemplo, un webhook liquida la misma operación mientras la consulta está en curso, sin quedarse bloqueado);
     - una app con un pool apuntando a un puerto cerrado: `POST /cash-in` responde 503.
 
-- [ ] **T10. Documentación**: entregables del README [DOC]
+- [x] **T10. Documentación**: entregables del README [DOC] — hecha por A (`README.md`)
   - `README.md` con estas secciones:
     - cómo ejecutar el proyecto;
     - arquitectura propuesta (con diagrama);
